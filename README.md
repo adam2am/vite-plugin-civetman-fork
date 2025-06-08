@@ -16,7 +16,7 @@ import type { PluginOption } from 'vite';
 
 export default defineConfig({
   plugin: [
-		civetman() as PluginOption
+	civetman() as PluginOption
   ]
 })
 ```
