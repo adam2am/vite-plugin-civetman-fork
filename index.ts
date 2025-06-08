@@ -4,7 +4,20 @@ import {
   type SpawnOptions,
   type ChildProcess,
 } from "node:child_process";
+import { createRequire } from "module";
 
+const requirePkg = createRequire(import.meta.url);
+
+/**
+ * Resolve the path to the civetman CLI, preferring civetman-fork if installed.
+ */
+function getCivetmanCliPath(): string {
+  try {
+    return requirePkg.resolve("civetman-fork/dist/index.js", { paths: [process.cwd()] });
+  } catch {
+    return requirePkg.resolve("civetman/dist/index.js", { paths: [process.cwd()] });
+  }
+}
 
 /**!
  * Helper to run civetman in another process
@@ -13,7 +26,8 @@ import {
  * @returns {ChildProcess} 
  */
 function runCivetmanCli(command: "dev" | "build", opt: SpawnOptions = {}): ChildProcess {
-  const program = fork("./node_modules/civetman/dist/index.js", [command], {
+  const cliPath = getCivetmanCliPath();
+  const program = fork(cliPath, [command], {
     stdio: ["inherit", "inherit", "inherit", "ipc"],
     env: { PATH: process.env.PATH, FORCE_COLOR: "1" },
     cwd: process.cwd(),
