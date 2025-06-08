@@ -25,9 +25,9 @@ function getCivetmanCliPath(): string {
  * @param {SpawnOptions} opt 
  * @returns {ChildProcess} 
  */
-function runCivetmanCli(command: "dev" | "build", opt: SpawnOptions = {}): ChildProcess {
+function runCivetmanCli(command: "dev" | "build", flags: string[] = [], opt: SpawnOptions = {}): ChildProcess {
   const cliPath = getCivetmanCliPath();
-  const program = fork(cliPath, [command], {
+  const program = fork(cliPath, [command, ...flags], {
     stdio: ["inherit", "inherit", "inherit", "ipc"],
     env: { PATH: process.env.PATH, FORCE_COLOR: "1" },
     cwd: process.cwd(),
@@ -39,13 +39,24 @@ function runCivetmanCli(command: "dev" | "build", opt: SpawnOptions = {}): Child
   return program;
 }
 
+interface CivetmanOptions {
+  noVscode?: boolean;
+  noGit?: boolean;
+}
 
 /**
  * Vite Plugin Civetman (compile .civet to .ts)
  * @returns {Plugin}
  */
-export function civetman(): Plugin {
+export function civetman(options: CivetmanOptions = {}): Plugin {
   let config: ResolvedConfig;
+  const pluginOpts = { noGit: true, noVscode: true, ...options };
+  function getFlags(): string[] {
+    const flags: string[] = [];
+    if (pluginOpts.noGit) flags.push("--noGit");
+    if (pluginOpts.noVscode) flags.push("--noVscode");
+    return flags;
+  }
   return {
     name: "vite-plugin-civetman" as const,
     configResolved(resolvedConfig: ResolvedConfig) {
@@ -54,7 +65,7 @@ export function civetman(): Plugin {
     },
     async buildStart() {
       if (config.command == "build") {
-        const process = runCivetmanCli("build");
+        const process = runCivetmanCli("build", getFlags());
         await new Promise<void>((resolve, reject) => {
           process.on("exit", (code ) => {
             if (code == 0) {
@@ -71,7 +82,7 @@ export function civetman(): Plugin {
         let process: ChildProcess | undefined = undefined;
         function tryCompileCivetmanWatch() {
           if (process) return;
-          process = runCivetmanCli("dev");
+          process = runCivetmanCli("dev", getFlags());
           process.on("exit", code => {
             console.error("CIVETMAN compile error is exit code=", code)
             process = undefined
