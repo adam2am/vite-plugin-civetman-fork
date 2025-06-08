@@ -12,10 +12,11 @@ Learn more about [`👉 @danielx/civet`](https://civet.dev), modern way to write
 ```typescript
 import { civetman } from 'vite-plugin-civetman';
 import { defineConfig } from 'vite';
+import type { PluginOption } from 'vite';
 
 export default defineConfig({
   plugin: [
-    civetman(),
+		civetman() as PluginOption
   ]
 })
 ```
