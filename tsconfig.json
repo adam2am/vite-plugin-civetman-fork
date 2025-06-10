@@ -3,9 +3,14 @@
     "lib": ["ESNext", "DOM"],
     "module": "esnext",
     "target": "esnext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "declaration": true,
     "noEmit": true,
     "removeComments": false,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "strict": true,
+    "skipLibCheck": true
   },
+  "include": ["index.ts", "builtin-civetman-fork/src/**/*.ts", "builtin-civetman-fork/src/**/*.civet"]
 }

@@ -5,34 +5,34 @@ import {
   type ChildProcess,
 } from "node:child_process";
 import { createRequire } from "module";
+import * as path from "path";
+import { fileURLToPath } from "url";
 
 const requirePkg = createRequire(import.meta.url);
+// Determine current directory (dist) for built-in CLI
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Resolve the path to the civetman CLI, preferring civetman-fork if installed.
  */
 function getCivetmanCliPath(): string {
+  let cliPath: string;
   try {
-    // Prefer civetman-fork from the user's project
-    return requirePkg.resolve("civetman-fork/dist/index.js", { paths: [process.cwd()] });
-  } catch (e) {
+    // Prefer user-installed civetman-fork
+    cliPath = requirePkg.resolve("civetman-fork/dist/index.js", { paths: [process.cwd()] });
+    console.log("Using project-installed civetman-fork");
+  } catch {
     try {
-      // Fallback to civetman with a warning
-      const civetmanPath = requirePkg.resolve("civetman/dist/index.js", { paths: [process.cwd()] });
+      // Fallback to original civetman with a warning
+      cliPath = requirePkg.resolve("civetman/dist/index.js", { paths: [process.cwd()] });
       console.log("Original civetman detected. It was 2 years without updates, so civetman-fork or deletion to activate built-in civetman recommended");
-      return civetmanPath;
-    } catch (e2) {
-      try {
-        // Fallback to the built-in civetman-fork
-        console.log("Built-in civetman-fork activated");
-        return requirePkg.resolve("./builtin-civetman-fork/dist/index.js");
-      } catch (e3) {
-        // All failed, throw an error
-        console.error("Could not find civetman-fork, civetman, or the built-in civetman-fork.");
-        throw new Error("civetman CLI not found. Please install `civetman-fork`.");
-      }
+    } catch {
+      // Fallback to the built-in civetman-fork (embedded)
+      cliPath = path.join(__dirname, "cli", "index.js");
+      console.log("Built-in civetman-fork activated");
     }
   }
+  return cliPath;
 }
 
 /**!
@@ -70,16 +70,21 @@ interface CivetmanOptions {
  */
 export function civetman(options: CivetmanOptions = {}): Plugin {
   let config: ResolvedConfig;
-  const pluginOpts = { tsx: false, gitIgnore: true, vscodeHide: true, inlineMap: 'none' as const, mapFiles: true, ...options };
+  const pluginOpts = { tsx: false, gitIgnore: true, vscodeHide: true, inlineMap: 'none' as const, mapFiles: false, ...options };
+
+  // Define flag mappings in explicit order for clarity
+  const flagMap: [keyof CivetmanOptions, (value: any) => string[]][] = [
+    ['tsx', (v) => v ? ['--tsx'] : []],
+    ['gitIgnore', (v) => v === false ? ['--no-git-ignore'] : []],
+    ['vscodeHide', (v) => v === false ? ['--no-vscode-hide'] : []],
+    ['inlineMap', (v) => ['--inline-map', v]],
+    ['mapFiles', (v) => v ? ['--map-files'] : []],
+  ];
+
   function getFlags(): string[] {
-    const flags: string[] = [];
-    if (pluginOpts.tsx) flags.push("--tsx");
-    if (pluginOpts.gitIgnore === false) flags.push("--no-git-ignore");
-    if (pluginOpts.vscodeHide) flags.push("--vscode-hide");
-    flags.push("--inline-map", pluginOpts.inlineMap);
-    if (pluginOpts.mapFiles === false) flags.push("--no-map-files");
-    return flags;
+    return flagMap.flatMap(([key, gen]) => gen(pluginOpts[key as keyof CivetmanOptions]));
   }
+
   return {
     name: "vite-plugin-civetman" as const,
     configResolved(resolvedConfig: ResolvedConfig) {

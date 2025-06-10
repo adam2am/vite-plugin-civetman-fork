@@ -30,9 +30,9 @@ opts .= null as unknown as Options
 defaultOpts: Options := 
     tsx: false, 
     gitIgnore: true, 
-    vscodeHide: false, 
+    vscodeHide: true, 
     inlineMap: "none", 
-    mapFiles: true
+    mapFiles: false
 
 
 collectFiles := async => 
@@ -54,6 +54,37 @@ compileFile := async (file: string) => {
 }
 
 fileToOutFile := (file: string, tsx: boolean) => file.replace(".civet", tsx ? ".tsx" : ".ts")
+
+cleanupStaleFiles := async (outFiles: string[], allCivetFiles: Set<string>) => {
+    spinner := ora(c.blue("Cleaning up stale output files...")).start()
+
+    // From all .civet files, create a set of all *possible* output file names
+    potentialFiles := new Set<string>()
+    for file of allCivetFiles
+        tsFile := file.replace(".civet", ".ts")
+        tsxFile := file.replace(".civet", ".tsx")
+        potentialFiles.add tsFile
+        potentialFiles.add tsxFile
+        potentialFiles.add(tsFile + ".map")
+        potentialFiles.add(tsxFile + ".map")
+
+    // Create a set of the files that were *actually* generated in this run
+    actuallyGenerated := new Set(outFiles)
+    if opts.mapFiles
+        for f of outFiles
+            actuallyGenerated.add(f + ".map")
+
+    cleanedCount .= 0
+    for file of potentialFiles
+        if !actuallyGenerated.has(file) && await fs.exists(file)
+            await fs.unlink file
+            cleanedCount++
+    
+    if cleanedCount > 0
+        spinner.succeed `Cleaned up ${cleanedCount} stale output file(s)!`
+    else
+        spinner.stop() // Silently stop if nothing to do
+}
 
 buildFile := async (file: string, tsx: boolean) => {
     outFile := fileToOutFile(file, tsx);
@@ -144,14 +175,14 @@ addGitignore := debounce(
 )
     
 program
-    .name "civetman" 
-    .description "Use Civet in any projects!" 
+    .name "civetman"
+    .description "Use Civet in any projects!"
     .version "0.0.1"
-    .option "-x, --tsx", "Generate `.tsx` files instead of `.ts` files"
-    .option "--no-git-ignore", "Disable writing to .gitignore file"
-    .option "--vscode-hide", "Hide build outputs in VSCode via files.exclude"
-    .option "--inline-map <mode>", "Inline source map mode: 'full' (embed full base64), 'fileurl' (embed file URL), or 'none' (no comment)", "fileurl"
-    .option "--no-map-files", "Disable emitting external .map files"
+    .option("-x, --tsx", "Generate .tsx files instead of .ts", defaultOpts.tsx)
+    .option("--no-git-ignore", "Disable writing generated files to .gitignore")
+    .option("--no-vscode-hide", "Disable hiding generated files in VS Code")
+    .option("--inline-map <mode>", "Inline source map mode: 'full', 'fileurl', or 'none'", defaultOpts.inlineMap)
+    .option("--map-files", "Enable emitting external .map files")
 
 program
     .command "build"
@@ -162,15 +193,15 @@ program
         spinner := ora c.blue """Building Civet files\n"""
         files := await collectFiles()
         outFiles := [] as string[]
-        for file of files
+        for file of (files as Set<string>)
             outFile := await buildFile file, opts.tsx
             outFiles.push outFile
-            spinner.succeed """
-                #{c.cyan file} -> #{c.green outFile}
-            """
+            spinner.succeed(c.cyan(file) + " -> " + c.green(outFile))
         spinner.stop()
         spinner.succeed("All Civet files built!\n")
         
+        await cleanupStaleFiles outFiles, files
+
         // Add both generated .ts/.tsx and their .map files to VSCode hides and .gitignore
         filesToProcess := opts.mapFiles ? [...outFiles, ...outFiles.map((f: string) => f + ".map")] : outFiles
         await addVscodeConfigFileExclude filesToProcess
@@ -190,15 +221,32 @@ program
         files := await collectFiles()
         outFiles := new Set<string>()
 
-        buildOneFile := async (file: string) => 
+        buildOneFile := async (file: string) => {
             outFile := await buildFile file, opts.tsx
             outFiles.add outFile
-            spinner.succeed """
-                #{c.cyan file} -> #{c.green outFile}
-            """
+            spinner.succeed(c.cyan(file) + " -> " + c.green(outFile))
 
-        watcher := chokidar.watch [...files, cwd], ignored: [/node_modules/gi, /dist/gi]
-        watcher.on "add", async (fileAbsolute) => 
+            // Clean up stale files from other extensions (ts vs tsx)
+            otherExt := opts.tsx ? ".ts" : ".tsx"
+            staleOutFile := file.replace(".civet", otherExt)
+            if await fs.exists(staleOutFile)
+                await fs.unlink(staleOutFile)
+            if await fs.exists(staleOutFile + ".map")
+                await fs.unlink(staleOutFile + ".map")
+            
+            // If map files are disabled, ensure no .map file for the current output
+            if !opts.mapFiles
+                if await fs.exists(outFile + ".map")
+                    await fs.unlink(outFile + ".map")
+        }
+
+        for file of (files as Set<string>)
+          await buildOneFile(file)
+        
+        spinner.succeed("Initial build complete!\n")
+
+        watcher := chokidar.watch [...(files as Set<string>), cwd], ignored: [/node_modules/gi, /dist/gi]
+        watcher.on "add", async (fileAbsolute: string) => 
             file := path.relative cwd, fileAbsolute
             if file.endsWith(".civet") 
                 await buildOneFile file
@@ -210,25 +258,36 @@ program
                 await addVscodeConfigFileExclude filesToProcess
                 await addGitignore filesToProcess
         
-        watcher.on "change", async (fileAbsolute) => 
+        watcher.on "change", async (fileAbsolute: string) => 
             file := path.relative cwd, fileAbsolute
             if files.has file
                 await buildOneFile file
         
-        watcher.on 'unlink', async (fileAbsolute) => 
+        watcher.on 'unlink', async (fileAbsolute: string) => {
             file := path.relative cwd, fileAbsolute
             if files.has file
                 files.delete file
-                outFile := fileToOutFile file, opts.tsx
-                outFiles.delete outFile
-                fs.unlink join cwd, outFile
-                // Delete the corresponding .map file if mapFiles is enabled
-                if opts.mapFiles
-                    fs.unlink join cwd, outFile + ".map"
+
+                // When a civet file is deleted, remove all possible outputs and maps
+                tsFile := fileToOutFile(file, false)
+                tsxFile := fileToOutFile(file, true)
+                // Remove stale files from the in-memory set
+                outFiles.delete(tsFile)
+                outFiles.delete(tsxFile)
+                if await fs.exists(tsFile)
+                    await fs.unlink(tsFile)
+                if await fs.exists(tsFile + ".map")
+                    await fs.unlink(tsFile + ".map")
+                if await fs.exists(tsxFile)
+                    await fs.unlink(tsxFile)
+                if await fs.exists(tsxFile + ".map")
+                    await fs.unlink(tsxFile + ".map")
+                
                 // Recompute which files to add to excludes/gitignore
                 filesToProcess := opts.mapFiles ? [...outFiles, ...[...outFiles].map((f: string) => f + ".map")] : [...outFiles]
                 await addVscodeConfigFileExclude filesToProcess
                 await addGitignore filesToProcess
+        }
 
         process.on 'beforeExit', => watcher.close()
 

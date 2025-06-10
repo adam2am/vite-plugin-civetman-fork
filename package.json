@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-civetman-fork",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "private": false,
   "description": "vite plugin for civetman (civet + watch compile)",
   "keywords": [
@@ -31,8 +31,9 @@
     "README.md"
   ],
   "scripts": {
-    "build": "pnpm run build:cli && bunx --bun tsup && mkdir -p dist/cli && cp packages/builtin-civetman-fork/dist/index.js dist/cli/index.js",
-    "build:cli": "cd packages/builtin-civetman-fork && vite build --config vite.config.cli.ts"
+    "build:cli": "npx vite build builtin-civetman-fork --config builtin-civetman-fork/vite.config.cli.ts",
+    "build:tsup": "tsup",
+    "build": "npm run build:cli && npm run build:tsup && mkdir -p dist/cli && cp builtin-civetman-fork/dist/index.js dist/cli/index.js"
   },
 	"dependencies": {
 		"@danielx/civet": "^0.10.4",
@@ -56,7 +57,8 @@
 		"tslib": "^2.8.1",
 		"vite": "^6.3.5",
 		"vite-plugin-civet": "^0.2.5",
-		"typescript": "^5.8.3"
+		"typescript": "^5.8.3",
+		"tsup": "^8.5.0"
 	},
   "peerDependencies": {
     "vite": "^6.0.0"
