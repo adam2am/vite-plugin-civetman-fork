@@ -40,8 +40,12 @@ function runCivetmanCli(command: "dev" | "build", flags: string[] = [], opt: Spa
 }
 
 interface CivetmanOptions {
-  noVscode?: boolean;
-  noGit?: boolean;
+  /** Generate .tsx files instead of .ts */
+  tsx?: boolean;
+  vscodeHide?: boolean;
+  gitIgnore?: boolean;
+  inlineMap?: 'full' | 'fileurl' | 'none';
+  mapFiles?: boolean;
 }
 
 /**
@@ -50,11 +54,14 @@ interface CivetmanOptions {
  */
 export function civetman(options: CivetmanOptions = {}): Plugin {
   let config: ResolvedConfig;
-  const pluginOpts = { noGit: true, noVscode: true, ...options };
+  const pluginOpts = { tsx: false, gitIgnore: true, vscodeHide: true, inlineMap: 'none' as const, mapFiles: true, ...options };
   function getFlags(): string[] {
     const flags: string[] = [];
-    if (pluginOpts.noGit) flags.push("--noGit");
-    if (pluginOpts.noVscode) flags.push("--noVscode");
+    if (pluginOpts.tsx) flags.push("--tsx");
+    if (pluginOpts.gitIgnore === false) flags.push("--no-git-ignore");
+    if (pluginOpts.vscodeHide) flags.push("--vscode-hide");
+    flags.push("--inline-map", pluginOpts.inlineMap);
+    if (pluginOpts.mapFiles === false) flags.push("--no-map-files");
     return flags;
   }
   return {
