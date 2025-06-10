@@ -13,9 +13,25 @@ const requirePkg = createRequire(import.meta.url);
  */
 function getCivetmanCliPath(): string {
   try {
+    // Prefer civetman-fork from the user's project
     return requirePkg.resolve("civetman-fork/dist/index.js", { paths: [process.cwd()] });
-  } catch {
-    return requirePkg.resolve("civetman/dist/index.js", { paths: [process.cwd()] });
+  } catch (e) {
+    try {
+      // Fallback to civetman with a warning
+      const civetmanPath = requirePkg.resolve("civetman/dist/index.js", { paths: [process.cwd()] });
+      console.log("Original civetman detected. It was 2 years without updates, so civetman-fork or deletion to activate built-in civetman recommended");
+      return civetmanPath;
+    } catch (e2) {
+      try {
+        // Fallback to the built-in civetman-fork
+        console.log("Built-in civetman-fork activated");
+        return requirePkg.resolve("./builtin-civetman-fork/dist/index.js");
+      } catch (e3) {
+        // All failed, throw an error
+        console.error("Could not find civetman-fork, civetman, or the built-in civetman-fork.");
+        throw new Error("civetman CLI not found. Please install `civetman-fork`.");
+      }
+    }
   }
 }
 

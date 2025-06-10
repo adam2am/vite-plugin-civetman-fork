@@ -26,21 +26,42 @@
   "main": "./dist/index.js",
   "files": [
     "dist/*",
+    "dist/cli/**/*",
     "package.json",
     "README.md"
   ],
   "scripts": {
-    "build": "bunx --bun tsup"
+    "build": "pnpm run build:cli && bunx --bun tsup && mkdir -p dist/cli && cp packages/builtin-civetman-fork/dist/index.js dist/cli/index.js",
+    "build:cli": "cd packages/builtin-civetman-fork && vite build --config vite.config.cli.ts"
   },
-  "dependencies": {},
+	"dependencies": {
+		"@danielx/civet": "^0.10.4",
+		"chokidar": "^4.0.3",
+		"commander": "^14.0.0",
+		"fast-glob": "^3.2.12",
+		"fs-extra": "^11.1.0",
+		"jsonc-parser": "^3.3.1",
+		"ora": "^8.2.0",
+		"picocolors": "^1.0.0",
+		"source-map-js": "^1.2.1",
+		"type-fest": "^4.41.0"
+	},
+	"devDependencies": {
+		"@rollup/plugin-typescript": "^12.1.2",
+		"@types/fs-extra": "^11.0.1",
+		"@types/node": "^24.0.0",
+		"@vitejs/plugin-react": "^4.5.1",
+		"prettier": "^3.5.3",
+		"rollup-plugin-add-shebang": "^0.3.1",
+		"tslib": "^2.8.1",
+		"vite": "^6.3.5",
+		"vite-plugin-civet": "^0.2.5",
+		"typescript": "^5.8.3"
+	},
   "peerDependencies": {
     "vite": "^6.0.0"
   },
-  "devDependencies": {
-    "@types/node": "^22.15.30",
-    "bun-types": "1.2.15",
-    "tsup": "^8.5.0",
-    "typescript": "5.8.3",
-    "vite": "^6.3.5"
+  "bin": {
+    "civetman": "./dist/cli/index.js"
   }
 }
