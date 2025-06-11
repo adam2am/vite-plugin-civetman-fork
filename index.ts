@@ -62,6 +62,8 @@ interface CivetmanOptions {
   gitIgnore?: boolean;
   inlineMap?: 'full' | 'fileurl' | 'none';
   mapFiles?: boolean;
+  outTs?: string | string[];
+  outTsx?: string | string[];
 }
 
 /**
@@ -70,19 +72,53 @@ interface CivetmanOptions {
  */
 export function civetman(options: CivetmanOptions = {}): Plugin {
   let config: ResolvedConfig;
-  const pluginOpts = { tsx: false, gitIgnore: true, vscodeHide: true, inlineMap: 'none' as const, mapFiles: false, ...options };
+  const pluginOpts = {
+    tsx: false,
+    gitIgnore: true,
+    vscodeHide: true,
+    inlineMap: 'none' as const,
+    mapFiles: false,
+    outTs: [],
+    outTsx: [],
+    ...options
+  };
+  // Default output dirs if none specified
+  const cwdDir = process.cwd();
+  if (!pluginOpts.outTs.length && !pluginOpts.outTsx.length) {
+    if (pluginOpts.tsx) pluginOpts.outTsx = [cwdDir];
+    else pluginOpts.outTs = [cwdDir];
+  } else if (pluginOpts.tsx && !pluginOpts.outTsx.length) {
+    // if tsx mode and outTsx not provided, default to cwd
+    pluginOpts.outTsx = [cwdDir];
+  }
 
-  // Define flag mappings in explicit order for clarity
-  const flagMap: [keyof CivetmanOptions, (value: any) => string[]][] = [
-    ['tsx', (v) => v ? ['--tsx'] : []],
-    ['gitIgnore', (v) => v === false ? ['--no-git-ignore'] : []],
-    ['vscodeHide', (v) => v === false ? ['--no-vscode-hide'] : []],
-    ['inlineMap', (v) => ['--inline-map', v]],
-    ['mapFiles', (v) => v ? ['--map-files'] : []],
+  // Define flag generators keyed by option name
+  const flagGenerators: Record<keyof CivetmanOptions, (value: any) => string[]> = {
+    tsx:       (v: boolean) => v ? ['--tsx'] : [],
+    gitIgnore: (v: boolean) => v === false ? ['--no-git-ignore'] : [],
+    vscodeHide:(v: boolean) => v === false ? ['--no-vscode-hide'] : [],
+    inlineMap: (v: string)  => ['--inline-map', v],
+    mapFiles:  (v: boolean) => v ? ['--map-files'] : [],
+    outTs:     (value: string | string[]) => {
+      if (!value || value.length === 0) return [];
+      // Ensure we have an array, then flatMap over it.
+      const dirs = Array.isArray(value) ? value : [value];
+      return dirs.flatMap(dir => ['--out-ts', dir]);
+    },
+    outTsx:    (value: string | string[]) => {
+      if (!value || value.length === 0) return [];
+      // Ensure we have an array, then flatMap over it.
+      const dirs = Array.isArray(value) ? value : [value];
+      return dirs.flatMap(dir => ['--out-tsx', dir]);
+    },
+  };
+  // Specify order of flags
+  const flagOrder: (keyof typeof flagGenerators)[] = [
+    'tsx', 'gitIgnore', 'vscodeHide', 'inlineMap', 'mapFiles', 'outTs', 'outTsx'
   ];
 
   function getFlags(): string[] {
-    return flagMap.flatMap(([key, gen]) => gen(pluginOpts[key as keyof CivetmanOptions]));
+    return flagOrder.flatMap(key => flagGenerators[key](pluginOpts[key as keyof CivetmanOptions]));
   }
 
   return {
