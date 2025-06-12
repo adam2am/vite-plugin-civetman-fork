@@ -184,7 +184,7 @@ gitignoreStart := "# civetman:start - Managed by civetman. DO NOT EDIT THIS BLOC
 gitignoreEnd := "# civetman:end - End of civetman managed block."
 
 addGitignore := debounce(
-    async (files: string[]) =>
+    async (files: string[]) => 
         spinner := ora c.blue """Updating .gitignore"""
         spinner.start()
 
@@ -208,7 +208,7 @@ addGitignore := debounce(
         newContent := rawContent.trimEnd() + "\n"
 
         if newContent !== original
-            await fs.writeFile gitignoreFile, newContent, "utf8"
+        await fs.writeFile gitignoreFile, newContent, "utf8"
 
         spinner.stop()
         spinner.succeed()
