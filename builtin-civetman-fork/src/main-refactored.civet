@@ -1,0 +1,449 @@
+// --------------------------------------------------------------
+// main-refactored.civet – Experimental rewrite with clean layering
+// --------------------------------------------------------------
+
+// ──────────────────────────────────────────────────────────────
+// Imports (pure-logic modules come first – no UI side-effects)  
+// ──────────────────────────────────────────────────────────────
+
+c from "picocolors"
+{ program } from "commander"
+fs from "fs-extra"
+glob from "fast-glob"
+pLimit from "p-limit"
+{ join } from "node:path"
+path from "node:path"
+os from "node:os"
+crypto from "node:crypto"
+chokidar from "chokidar"
+ora from "ora"
+{ compile } from "@danielx/civet"
+{ parseTree as jsoncParseTree, findNodeAtLocation as jsoncFindNodeAtLocation, getNodeValue as jsoncGetNodeValue, modify as jsoncModify, applyEdits as jsoncApplyEdits } from "jsonc-parser"
+
+// ──────────────────────────────────────────────────────────────
+// Types & defaults                                                
+// ──────────────────────────────────────────────────────────────
+
+type Options =
+    tsx: boolean,
+    gitIgnore: boolean,
+    vscodeHide: boolean,
+    inlineMap: "full" | "fileurl" | "none",
+    mapFiles: boolean,
+    outTs?: string[],      // folders
+    outTsx?: string[],
+    concurrency?: number
+
+defaultOpts: Options :=
+    tsx: false,
+    gitIgnore: true,
+    vscodeHide: true,
+    inlineMap: "full",
+    mapFiles: false,
+    concurrency: Math.min(2, (os.cpus()?.length || 2))
+
+// ──────────────────────────────────────────────────────────────
+// Build-state layer – Pure functions operating on BuildContext  
+// ──────────────────────────────────────────────────────────────
+
+// A central object that holds all mutable state. Tests can mock it easily.
+type BuildContext =
+    opts: Options,
+    cwd: string,
+    // list of civet source files (fixed for single build run)
+    sources: string[],
+    // outputs produced in this run
+    outFiles: Set<string>,
+    // previous manifest data (for pruning)
+    prevGenerated: Set<string>,
+    // previous content hashes for incremental builds
+    prevHashes: Record<string, { hash: string, outFile: string }>,
+    // new hashes produced this run
+    newHashes: Record<string, { hash: string, outFile: string }>
+
+// ---------------- helper utils (pure) ----------------
+
+computeHash := (input: string): string =>
+    crypto.createHash("sha1").update(input).digest("hex")
+
+// ------------------------------------------------------------------
+// Atomic write utility ensures we never leave partially-written files
+// ------------------------------------------------------------------
+safeWrite := async (filePath: string, data: string | Buffer) =>
+    tmp := filePath + "." + crypto.randomUUID() + ".civetmantmp"
+    await fs.writeFile(tmp, data)
+    await fs.rename(tmp, filePath)
+
+// Remove stray *.civetmantmp files that belong to our outputs
+cleanupTmpFiles := async (cwd: string) =>
+    tmpFiles := await glob("**/*.civetmantmp", cwd: cwd)
+    for tmp of tmpFiles
+        try
+            await fs.unlink(tmp)
+        catch _
+            continue
+
+fileToOutFile := (file: string, tsx: boolean) =>
+    file.replace(".civet", tsx ? ".tsx" : ".ts")
+
+// Decide ts vs tsx based on CLI options / folder flags
+resolveOutputType := (ctx: BuildContext, file: string): boolean =>
+    relativeFile := path.relative(ctx.cwd, file)
+
+    findLongestMatch := (dirs: string[]) =>
+        matches := (dirs || []).filter((dir: string) => {
+            normalized := path.normalize(dir)
+            return normalized === '.' || relativeFile.startsWith(normalized + path.sep)
+        })
+        if !matches.length return null
+        matches.sort((a,b) => b.length - a.length)[0]
+
+    tsxMatch := findLongestMatch(ctx.opts.outTsx ? ctx.opts.outTsx : [])
+    tsMatch  := findLongestMatch(ctx.opts.outTs  ? ctx.opts.outTs  : [])
+    if tsxMatch && tsMatch
+        return tsxMatch.length >= tsMatch.length
+    if tsxMatch return true
+    if tsMatch  return false
+    return ctx.opts.tsx
+
+collectDirs := (val: string, prev: string[]) =>
+    // Accept comma-separated lists or repeatable flags.
+    prev.concat(
+        val.split(",")
+            .map((s: string) => s.trim())
+            .filter((s): s is string => !!s)
+    )
+
+// ---------------- manifest helpers (pure fs) ----------------
+manifestDir := (cwd: string) => join(cwd, ".civetman")
+manifestFile := (cwd: string) => join(manifestDir(cwd), "manifest.json")
+hashManifestFile := (cwd: string) => join(manifestDir(cwd), "hashes.json")
+
+loadJSON := async (file: string, fallback: any) =>
+    if await fs.exists(file)
+        try
+            JSON.parse(await fs.readFile(file, "utf8"))
+        catch
+            fallback
+    else
+        fallback
+
+saveJSON := async (file: string, data: any) =>
+    await fs.ensureDir(path.dirname(file))
+    await safeWrite(file, JSON.stringify(data, null, 2))
+
+loadPrevState := async (cwd: string) =>
+    manifestObj := await loadJSON(manifestFile(cwd), { generated: [] })
+    prevGenerated := new Set(manifestObj.generated as string[])
+    prevHashes := await loadJSON(hashManifestFile(cwd), {}) as Record<string, { hash: string, outFile: string }>
+    { prevGenerated, prevHashes }
+
+saveNewState := async (ctx: BuildContext) =>
+    await saveJSON(manifestFile(ctx.cwd), { version: 1, generated: [...ctx.outFiles] })
+    await saveJSON(hashManifestFile(ctx.cwd), ctx.newHashes)
+
+// ---------------- compilation (pure, worker-thread ready) ----------------
+compileSource := async (ctx: BuildContext, file: string) =>
+    // decide output type & expected filename
+    isTsx := resolveOutputType(ctx, file)
+    expectedOut := fileToOutFile(file, isTsx)
+
+    // incremental skip logic
+    content := await fs.readFile(file, "utf8")
+    newHash := computeHash(content)
+    prev := ctx.prevHashes[file]
+
+    if prev && prev.hash == newHash && prev.outFile == expectedOut && await fs.exists(expectedOut)
+        ctx.outFiles.add expectedOut
+        ctx.newHashes[file] = { hash: newHash, outFile: expectedOut }
+        return "skip"
+
+    // actual compile
+    try
+        { code, sourceMap } := await compile(content, { filename: file, sourceMap: true }) as { code: string, sourceMap: any }
+
+        // --- Source-map handling -----------------------------------------
+        codeWithMap .= code
+        mapFile := expectedOut + ".map"
+
+        // 1. Inline source-map data URI
+        if ctx.opts.inlineMap == "full"
+            mapJson := sourceMap.json(file, expectedOut)
+            base64Map := Buffer.from(JSON.stringify(mapJson)).toString("base64")
+            codeWithMap += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
+
+        // 2. External .map file when requested
+        if ctx.opts.mapFiles
+            await safeWrite(mapFile, JSON.stringify(sourceMap.json(file, expectedOut)))
+
+            if ctx.opts.inlineMap == "fileurl"
+                codeWithMap += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"
+
+        // Write final code (with or without inline map reference)
+        await safeWrite(expectedOut, codeWithMap)
+        ctx.outFiles.add expectedOut
+        ctx.newHashes[file] = { hash: newHash, outFile: expectedOut }
+        return "built"
+    catch e
+        // propagate error – UI layer decides what to log/exit
+        throw e
+
+// ---------------- task-queue orchestrator ----------------
+compileAll := async (ctx: BuildContext) =>
+    concurrency: number := Math.max(1, ctx.opts.concurrency ?? defaultOpts.concurrency ?? 2)
+    limitFn := pLimit(concurrency)
+    results := await Promise.all ctx.sources.map((file) => limitFn(() => compileSource(ctx, file)))
+    return results
+
+// ---------------- side-effect helpers (IDE, gitignore) ----------------
+addVscodeExcludes := async (ctx: BuildContext) =>
+    // Build the list of patterns we should hide inside VS Code
+    files .= [...ctx.outFiles]
+    if ctx.opts.mapFiles
+        files = [...files, ...files.map((f: string) => f + ".map")]
+    
+    placeholder := "below is generated by civetman"
+    configKey := "files.exclude"
+    tmpGlob := "**/*.civetmantmp"
+
+    vscodeDir := join(ctx.cwd, ".vscode")
+    settingsFile := join(vscodeDir, "settings.json")
+
+    await fs.ensureDir(vscodeDir)
+    await fs.ensureFile(settingsFile)
+
+    content := await fs.readFile(settingsFile, "utf8")
+    errors := [] as any[]
+    tree := jsoncParseTree(content, errors, { allowTrailingComma: true })
+    if !tree
+        // cannot parse settings, bail early
+        return
+
+    node := jsoncFindNodeAtLocation(tree, [configKey])
+    existing := (node ? jsoncGetNodeValue(node) : {}) as Record<string, boolean>
+
+    // Preserve any excludes that are not ours
+    manual := Object.entries(existing).reduce((acc: Record<string, boolean>, [k,v]) =>
+        if k != placeholder && !files.includes(k)
+            acc[k] = v
+        acc
+    , {})
+
+    newExclude := if ctx.opts.vscodeHide
+        dynamic := files.reduce((acc: Record<string, boolean>, f: string) => ({ ...acc, [f]: true }), {})
+        dynamic[tmpGlob] = true
+        { ...manual, [placeholder]: true, ...dynamic }
+    else
+        manual
+
+    edits := jsoncModify(content, [configKey], newExclude, { formattingOptions: { insertSpaces: true, tabSize: 2 } })
+    newContent := jsoncApplyEdits(content, edits)
+    if newContent != content
+        await fs.writeFile(settingsFile, newContent, "utf8")
+    return
+
+addGitignoreEntries := async (ctx: BuildContext) =>
+    gitignorePath := join(ctx.cwd, ".gitignore")
+    startMarker := "# civetman:start - Managed by civetman. DO NOT EDIT THIS BLOCK."
+    endMarker := "# civetman:end - End of civetman managed block."
+
+    await fs.ensureFile(gitignorePath)
+    original .= await fs.readFile(gitignorePath, "utf8")
+
+    generatedFiles .= [...ctx.outFiles]
+    if ctx.opts.mapFiles
+        generatedFiles = [...generatedFiles, ...generatedFiles.map((f: string) => f + ".map")]
+
+    startIdx := original.indexOf(startMarker)
+    endIdx := startIdx == -1 ? -1 : original.indexOf(endMarker, startIdx + startMarker.length)
+
+    [before, after] := if startIdx != -1 && endIdx != -1
+        [original.substring(0, startIdx), original.substring(endIdx + endMarker.length)]
+    else
+        [original, ""]
+
+    managedBlock := if ctx.opts.gitIgnore
+        [startMarker, ...generatedFiles, endMarker].join("\n")
+    else
+        ""
+
+    combined := (before.trimEnd() + "\n\n" + managedBlock + "\n\n" + after.trimStart()).trimEnd() + "\n"
+
+    if combined != original
+        await fs.writeFile(gitignorePath, combined, "utf8")
+    return
+
+// Ensure .civetman/ dir is ignored by git
+ensureGitignoreManifestEntry := async (cwd: string) =>
+    gitignoreFile := join(cwd, ".gitignore")
+    await fs.ensureFile(gitignoreFile)
+    entry := "/.civetman/"
+    content := await fs.readFile(gitignoreFile, "utf8")
+    if !content.split("\n").map((l) => l.trim()).includes(entry)
+        await fs.appendFile(gitignoreFile, "\n" + entry + "\n")
+
+// ---------------- helper to prune stale outputs ----------------
+pruneStaleOutputs := async (ctx: BuildContext) =>
+    stale := [...ctx.prevGenerated].filter((f) => !ctx.outFiles.has(f))
+    for file of stale
+        try
+            if await fs.exists(join(ctx.cwd, file))
+                await fs.unlink(join(ctx.cwd, file))
+            if await fs.exists(join(ctx.cwd, file + ".map"))
+                await fs.unlink(join(ctx.cwd, file + ".map"))
+        catch _
+            // best effort – ignore deletion errors
+            continue
+    return
+
+// ---------------- top-level build function (pure-ish) ----------------
+runBuild := async (cwd: string, opts: Options) =>
+    // Step 0: scrub temp files from previous aborted runs
+    await cleanupTmpFiles(cwd)
+    await ensureGitignoreManifestEntry(cwd)
+
+    // Step 1: collect source files
+    sources := await glob("**/*.civet", ignore: ["node_modules/**/*", "dist/**/*"], cwd: cwd)
+
+    // Step 2: load previous state and create context
+    { prevGenerated, prevHashes } := await loadPrevState(cwd)
+    ctx: BuildContext :=
+        opts: opts,
+        cwd: cwd,
+        sources: sources,
+        outFiles: new Set<string>(),
+        prevGenerated: prevGenerated,
+        prevHashes: prevHashes,
+        newHashes: {}
+
+    // Step 3: build all
+    await compileAll(ctx)
+
+    // Step 4: prune stale outputs & save new state (TODO: implement prune)
+    await pruneStaleOutputs(ctx)
+
+    await saveNewState(ctx)
+
+    // Step 5: IDE / VCS hygiene
+    await addVscodeExcludes(ctx)
+    await addGitignoreEntries(ctx)
+
+    return ctx
+
+// ──────────────────────────────────────────────────────────────
+// UI layer – Responsible for colours, spinners, CLI exit codes   
+// ──────────────────────────────────────────────────────────────
+
+spinnerWrap := async (title: string, fn: Function) =>
+    spin := ora(c.blue(title)).start()
+    try
+        res := await fn(spin)
+        spin.succeed()
+        return res
+    catch e
+        spin.fail()
+        throw e
+
+// CLI command – build
+registerBuildCommand := =>
+    program.command "build"
+        .description "One-shot compile of all .civet files"
+        .action async =>
+            cwd := process.cwd()
+            opts := { ...defaultOpts, ...program.opts<Options>() }
+            try
+                await spinnerWrap("Building Civet files", => runBuild(cwd, opts))
+                console.log c.green("\nCivetman finished building!")
+            catch e
+                console.error c.red("Build failed ☠"), e
+                process.exitCode = 1
+                return
+
+// ---------------- watch mode ----------------
+registerDevCommand := =>
+    devAction := async (): Promise<void> =>
+        cwd := process.cwd()
+        opts := { ...defaultOpts, ...program.opts<Options>() }
+        try
+            console.log c.blue("Civetman starts building in watch mode…\n")
+            ctx := await runBuild(cwd, opts)
+            console.log c.green("Initial build complete! Watching for changes…\n")
+            syncConfigs := debounce(async =>
+                await addVscodeExcludes(ctx)
+                await addGitignoreEntries(ctx)
+            , 800)
+            watcher := chokidar.watch("**/*.civet", { cwd, ignored: [/node_modules/, /dist/] })
+            rebuildOne := async (file: string) =>
+                try
+                    await compileSource(ctx, file)
+                    if ctx.newHashes[file]
+                        ctx.prevHashes[file] = ctx.newHashes[file]
+                    ctx.newHashes = {}
+                    syncConfigs()
+                catch e
+                    console.error("Civetman error compiling", file, e)
+            watcher.on "add", (abs) ->
+                file := path.relative(cwd, abs)
+                if !ctx.sources.includes(file)
+                    ctx.sources.push file
+                rebuildOne(file)
+            watcher.on "change", (abs) ->
+                file := path.relative(cwd, abs)
+                rebuildOne(file)
+            watcher.on "unlink", async (abs) =>
+                file := path.relative(cwd, abs)
+                ctx.sources = ctx.sources.filter((f) => f != file)
+                tsFile := fileToOutFile(file, false)
+                tsxFile := fileToOutFile(file, true)
+                for out of [tsFile, tsxFile]
+                    if await fs.exists(out)
+                        await fs.unlink(out)
+                    if await fs.exists(out + ".map")
+                        await fs.unlink(out + ".map")
+                    ctx.outFiles.delete(out)
+                syncConfigs()
+            process.on "SIGINT", async =>
+                watcher.close()
+                await saveNewState(ctx)
+                console.log("\nCivetman watch stopped.")
+                process.exit()
+            return
+        catch e
+            console.error c.red("Watch mode failed"), e
+            process.exitCode = 1
+            return
+    program.command "dev"
+        .description "Watch .civet files and rebuild on change"
+        .action devAction
+
+export default () =>
+    // top-level CLI wiring
+    program
+        .name "civetman"
+        .description "Use Civet language in any project – build or watch .civet files"
+        .version "0.1.0"
+        .option("-x, --tsx", "Generate .tsx files instead of .ts", defaultOpts.tsx)
+        .option("--out-ts <dir>", "Directory to emit .ts files (repeatable or comma-separated)", collectDirs, [] as string[])
+        .option("--out-tsx <dir>", "Directory to emit .tsx files (repeatable or comma-separated)", collectDirs, [] as string[])
+        .option("--no-git-ignore", "Disable writing generated files to .gitignore")
+        .option("--no-vscode-hide", "Disable hiding generated files in VS Code")
+        .option("--inline-map <mode>", "Inline source map mode", defaultOpts.inlineMap)
+        .option("--map-files", "Emit external .map files")
+        .option("--concurrency <number>", "Max parallel compilations", (val) => parseInt(val, 10))
+
+    registerBuildCommand()
+    registerDevCommand()
+
+    program.parse(process.argv)
+
+// --------------------------------------------------------------
+// End of experimental refactor skeleton
+// --------------------------------------------------------------
+
+// Lightweight debounce util for watch-mode side-effects
+debounce := (func: Function, timeout = 1000) ->
+    timer: NodeJS.Timeout | null .= null
+    (...args: any[]) ->
+        if timer?
+            clearTimeout(timer)
+        timer = setTimeout (-> func(...args)), timeout
