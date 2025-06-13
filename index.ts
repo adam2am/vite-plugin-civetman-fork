@@ -64,6 +64,7 @@ interface CivetmanOptions {
   mapFiles?: boolean;
   outTs?: string | string[];
   outTsx?: string | string[];
+  concurrency?: number; // max parallel compilations
 }
 
 /**
@@ -76,10 +77,11 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
     tsx: false,
     gitIgnore: true,
     vscodeHide: true,
-    inlineMap: 'none' as const,
+    inlineMap: 'full' as const,
     mapFiles: false,
     outTs: [],
     outTsx: [],
+    concurrency: undefined as number | undefined,
     ...options
   };
   // Default output dirs if none specified
@@ -101,20 +103,19 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
     mapFiles:  (v: boolean) => v ? ['--map-files'] : [],
     outTs:     (value: string | string[]) => {
       if (!value || value.length === 0) return [];
-      // Ensure we have an array, then flatMap over it.
       const dirs = Array.isArray(value) ? value : [value];
       return dirs.flatMap(dir => ['--out-ts', dir]);
     },
     outTsx:    (value: string | string[]) => {
       if (!value || value.length === 0) return [];
-      // Ensure we have an array, then flatMap over it.
       const dirs = Array.isArray(value) ? value : [value];
       return dirs.flatMap(dir => ['--out-tsx', dir]);
     },
-  };
+    concurrency: (n: number) => Number.isFinite(n) ? ['--concurrency', String(n)] : [],
+  } as any;
   // Specify order of flags
   const flagOrder: (keyof typeof flagGenerators)[] = [
-    'tsx', 'gitIgnore', 'vscodeHide', 'inlineMap', 'mapFiles', 'outTs', 'outTsx'
+    'tsx', 'gitIgnore', 'vscodeHide', 'inlineMap', 'mapFiles', 'outTs', 'outTsx', 'concurrency'
   ];
 
   function getFlags(): string[] {
