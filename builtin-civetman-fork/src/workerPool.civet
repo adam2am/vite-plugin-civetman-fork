@@ -1,0 +1,35 @@
+// --------------------------------------------------------------
+// workerPool.civet – Minimal worker-thread pool for CPU tasks
+// --------------------------------------------------------------
+import { Worker } from "node:worker_threads"
+import os from "node:os"
+
+// A very small pool implementation – good enough for our compile workers.
+export class WorkerPool
+    size: number
+    idle: Worker[]
+    pending: { worker: Worker, resolve: (w: Worker) => void }[]
+
+    constructor(size = Math.max(1, os.cpus()?.length || 2))
+        @size = size
+        @idle = []
+        @pending = []
+
+    // Acquire a worker (waiting if none free)
+    acquire :=  -> new Promise<(w: Worker)>(resolve =>
+        if @idle.length > 0
+            resolve(@idle.pop()!)
+        else if @idle.length + @pending.length < @size
+            worker := new Worker(new URL("./workers/compileWorker.cjs", import.meta.url))
+            resolve(worker)
+        else
+            @pending.push({ resolve })
+    )
+
+    release := (w: Worker) ->
+        if @pending.length > 0
+            @pending.shift()!.resolve(w)
+        else
+            @idle.push(w)
+
+export default WorkerPool 
