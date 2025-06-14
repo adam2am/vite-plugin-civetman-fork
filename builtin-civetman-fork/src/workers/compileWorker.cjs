@@ -6,12 +6,16 @@ if (!node_worker_threads.parentPort) {
   throw new Error("Must be run as a worker thread.");
 }
 node_worker_threads.parentPort.on("message", async (msg) => {
-  const { file, content, isTsx } = msg;
+  const { file, content: incoming, isTsx, parseOpts } = msg;
+  let content = incoming;
   try {
-    if (!(content != null)) {
-      const content2 = await fs.readFile(file, "utf8");
+    if (content == null) {
+      content = await fs.readFile(file, "utf8");
     }
-    const { code, sourceMap } = await civet.compile(content, { filename: file, sourceMap: true });
+    const compileOptions = { filename: file, sourceMap: true };
+    if (parseOpts)
+      compileOptions.parseOptions = parseOpts;
+    const { code, sourceMap } = await civet.compile(content, compileOptions);
     const outFile = file.replace(".civet", isTsx ? ".tsx" : ".ts");
     const mapJson = sourceMap.json(file, outFile);
     const plainMap = JSON.parse(JSON.stringify(mapJson));

@@ -17,6 +17,7 @@ import {
     type CompileResult 
 } from "./main-refactored.civet"
 import { compile } from "@danielx/civet"
+import { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 export class BuildEngine
     ctx: BuildContext
@@ -65,7 +66,12 @@ export class BuildEngine
             readData := await fs.readFile(file, "utf8")
             @contentCache.set(file, readData)
             readData
-        signature := makeSignature(content, { tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles })
+        // ---- Load Civet parseOptions once per task ----
+        configPath := await findCivetConfig(@ctx.cwd)
+        civetConfig := (configPath? ? await loadCivetConfig(configPath) : {}) || {}
+        parseOpts := civetConfig?.parseOptions
+
+        signature := makeSignature(content, { tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles, parseOpts })
 
         // Skip check
         prev := @ctx.prevHashes[file]
@@ -85,16 +91,36 @@ export class BuildEngine
 
         // Use worker pool if available and concurrency allows, otherwise compile in-process.
         if (@ctx.opts.concurrency ?? 1) > 1 and @pool.poolAvailable
-            logDebug("[COMPILE] Compiling with worker", file)
-            workerResult := await @pool.exec({ file, content, isTsx })
-            code = workerResult.code
-            mapJson = workerResult.mapJson
+            try
+                logDebug("[COMPILE] Compiling with worker", file)
+                workerResult := await @pool.exec({ file, content, isTsx, wantMap, parseOpts })
+                code = workerResult.code
+                mapJson = workerResult.mapJson
+            catch workerErr
+                logDebug("[COMPILE] Worker failed, falling back", workerErr)
+                compileOpts := {
+                    filename: file,
+                    sourceMap: wantMap,
+                    ...(parseOpts ? { parseOptions: parseOpts } : {})
+                }
+                compileResult := await compile(content, compileOpts) as unknown as { code: string, sourceMap?: any }
+                code = compileResult.code
+                if wantMap and compileResult.sourceMap?
+                    mapJson = compileResult.sourceMap.json(file, expectedOut)
         else
             logDebug("[COMPILE] Compiling in-process", file)
-            compileResult := await compile(content, { filename: file, sourceMap: wantMap }) as unknown as { code: string, sourceMap?: any }
+            compileOpts := {
+                filename: file,
+                sourceMap: wantMap,
+                ...(parseOpts ? { parseOptions: parseOpts } : {})
+            }
+            compileResult := await compile(content, compileOpts) as unknown as { code: string, sourceMap?: any }
             code = compileResult.code
             if wantMap and compileResult.sourceMap?
                 mapJson = compileResult.sourceMap.json(file, expectedOut)
+
+        // ensure cache stores latest content
+        @contentCache.set(file, content)
 
         return await writeOutputAndGetResult(@ctx, file, isTsx, code, mapJson, signature)
 

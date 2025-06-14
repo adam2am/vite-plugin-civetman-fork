@@ -3,9 +3,11 @@
 // --------------------------------------------------------------------
 import fs from "fs-extra"
 import path from "node:path"
+import { safeWrite } from "./main-refactored.civet"
+
 
 // A record in our hashes.jsonl file
-type HashEntry = 
+export type HashEntry = 
     file: string,
     sig: string,
     outFile: string
@@ -35,10 +37,11 @@ export loadHashesFromJSONL :=
             // On any error, return empty map to force a full rebuild.
             return {}
 
-
-// Appends a single record to a .jsonl file.
-export appendHashToJSONL := 
-    async (filePath: string, entry: HashEntry) => 
-        await fs.ensureDir(path.dirname(filePath))
-        line := JSON.stringify(entry) + '\n'
-        await fs.appendFile(filePath, line)
+// Overwrites the hashes file with the latest, complete state.
+export writeHashesToJSONL :=
+    async (filePath: string, hashes: Record<string, { sig: string, outFile: string }>) =>
+        lines := Object.entries(hashes).map (([file, data]) => 
+            JSON.stringify({ file, ...data })
+        )
+        content := lines.join('\n') + '\n'
+        await safeWrite(filePath, content) 

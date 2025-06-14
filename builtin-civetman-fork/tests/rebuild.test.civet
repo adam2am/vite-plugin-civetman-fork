@@ -1,0 +1,62 @@
+import { describe, it, before, after } from 'mocha'
+import fs from 'fs-extra'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import assert from 'node:assert'
+import stripAnsi from 'strip-ansi'
+import { fileURLToPath } from 'node:url'
+
+// __dirname polyfill for ESM test files
+__filename := fileURLToPath(import.meta.url)
+__dirname  := path.dirname(__filename)
+
+// --- Test Setup ---
+const tempDir = path.resolve(__dirname, 'temp-invalidation-test')
+const cliPath = path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
+
+runBuild := (cwd: string) ->
+    result := spawnSync('node', [cliPath, 'build'], { cwd, encoding: 'utf8' })
+    unless result.status == 0
+        console.error(stripAnsi(result.stdout + result.stderr))
+        throw new Error('Build failed')
+    stripAnsi(result.stdout + result.stderr)
+
+describe 'Cache Invalidation on Config Change', ->
+    before async ->
+        await fs.remove(tempDir)  // start clean
+        await fs.ensureDir(tempDir)
+        // initial project state
+        await fs.writeFile(path.join(tempDir, 'a.civet'), 'export x := 1')
+        await fs.writeJson(path.join(tempDir, 'civetconfig.json'),
+            parseOptions:
+                js: false
+        )
+
+    after async ->
+        await fs.remove(tempDir)
+
+    it 'performs an initial build', async ->
+        output1 := runBuild(tempDir)
+        assert.ok(output1.includes('Built 1'), 'Initial build did not report 1 built file')
+
+        outFile := path.join(tempDir, 'a.ts')
+        assert.ok(await fs.pathExists(outFile), 'Output TS file missing')
+        content := await fs.readFile(outFile, 'utf8')
+        assert.ok(!content.includes('// @ts-nocheck'), 'Unexpected ts-nocheck in initial build')
+
+    it 'skips compilation on a second run with no changes', async ->
+        output2 := runBuild(tempDir)
+        assert.ok(/skip/i.test(output2), 'Second build did not skip as expected')
+
+    it 'rebuilds after civetconfig.json changes', async ->
+        await fs.writeJson(path.join(tempDir, 'civetconfig.json'),
+            parseOptions:
+                js: true
+        )
+
+        output3 := runBuild(tempDir)
+        assert.ok(output3.includes('Built 1'), 'Rebuild did not trigger')
+
+        outFile := path.join(tempDir, 'a.ts')
+        content := await fs.readFile(outFile, 'utf8')
+        assert.ok(content.includes('// @ts-nocheck'), 'ts-nocheck missing after config change')

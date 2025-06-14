@@ -22,9 +22,10 @@ ora from "ora"
 import type { ParseError } from "jsonc-parser"
 // @ts-ignore
 import { BuildEngine } from "./engine.civet"
-import { loadHashesFromJSONL, appendHashToJSONL } from "./jsonl-helpers.civet"
+import { loadHashesFromJSONL, writeHashesToJSONL } from "./jsonl-helpers.civet"
 // @ts-ignore – Micromatch ships its own types in modern versions; fallback suppress
 import micromatch from "micromatch"
+import { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 // ------------------------------------------------------------------
 // Global build fingerprint – any change forces full rebuilds
@@ -97,17 +98,25 @@ export type BuildContext =
 // ---------------- helper utils (pure) ----------------
 
 computeHash := (input: string): string =>
-    createHash("sha1").update(input).digest("hex")
+    createHash("sha256").update(input).digest("hex")
 
 // Computes the deterministic build signature shared by all build paths.
 // This centralises the formula so changes happen in one place.
 export makeSignature := (
     content: string,
-    opts: { tsx: boolean, inlineMap: string | boolean | any, mapFiles: boolean }
+    opts: { 
+        tsx: boolean, 
+        inlineMap: string | boolean | any, 
+        mapFiles: boolean, 
+        parseOpts?: any }
 ) : string =>
     computeHash(
         content +
-        JSON.stringify({ tsx: opts.tsx, inlineMap: opts.inlineMap, mapFiles: opts.mapFiles }) +
+        JSON.stringify({ 
+            tsx: opts.tsx, 
+            inlineMap: opts.inlineMap, 
+            mapFiles: opts.mapFiles, 
+            parseOpts: opts.parseOpts ?? null }) +
         buildFingerprint
     )
 
@@ -133,7 +142,7 @@ export logDebug := (...args: any[]) =>
 // ------------------------------------------------------------------
 // Atomic write utility ensures we never leave partially-written files
 // ------------------------------------------------------------------
-safeWrite := async (filePath: string, data: string | Buffer) =>
+export safeWrite := async (filePath: string, data: string | Buffer) =>
     await fs.ensureDir(path.dirname(filePath))
     tmp := filePath + "." + randomUUID() + ".civetmantmp"
     await fs.writeFile(tmp, data)
@@ -209,10 +218,9 @@ saveNewState := async (ctx: BuildContext) =>
     // Save generated file list (still full write, but it's small)
     await saveJSON(manifestFile(ctx.cwd), { version: 1, generated: [...ctx.outFiles] })
 
-    // Append new hashes to our JSONL file instead of overwriting.
-    for (const [file, data] of Object.entries(ctx.newHashes)) {
-        await appendHashToJSONL(hashManifestFile(ctx.cwd), { file, ...data })
-    }
+    // Overwrite the hashes file with the full, compacted state.
+    allHashes := { ...ctx.prevHashes, ...ctx.newHashes }
+    await writeHashesToJSONL(hashManifestFile(ctx.cwd), allHashes)
 
     logDebug("[STATE] State saved successfully")
 
@@ -261,11 +269,20 @@ export compileSource := async (ctx: BuildContext, file: string): Promise<Compile
 
     // compute deterministic signature for incremental builds ------------
     content := await fs.readFile(file, "utf8")
-    signature := makeSignature(content, { tsx: isTsx, inlineMap: ctx.opts.inlineMap, mapFiles: ctx.opts.mapFiles })
+
+    //  -- look for a civet config file (🐈.json, civetconfig.json, etc.) to include in signature and pass to compiler
+    configPath := await findCivetConfig(ctx.cwd)           // might be null if none exists
+    civetConfig := (configPath? ? await loadCivetConfig(configPath) : {}) || {}
+    parseOpts := civetConfig?.parseOptions
+
+    signature := makeSignature(content, { 
+        tsx: isTsx, 
+        inlineMap: ctx.opts.inlineMap, 
+        mapFiles: ctx.opts.mapFiles, 
+        parseOpts })
 
     prev := ctx.prevHashes[file]
     logDebug("[COMPILE] Sig check", { file, signature, prevSig: prev?.sig })
-
     try 
         if (prev && prev.sig == signature && prev.outFile == expectedOut && await fs.exists(expectedOut)) 
             // outputs are guaranteed to be correct – quick skip
@@ -282,7 +299,14 @@ export compileSource := async (ctx: BuildContext, file: string): Promise<Compile
     try 
         logDebug("[COMPILE] Starting actual in-process compilation", file)
         needMap := ctx.opts.inlineMap != "none" || ctx.opts.mapFiles
-        compileRes := await compile(content, { filename: file, sourceMap: needMap }) as unknown as { code: string, sourceMap?: any }
+
+        compileOptions := {
+            filename: file,
+            sourceMap: needMap,
+            ...(parseOpts ? { parseOptions: parseOpts } : {})
+        }
+
+        compileRes := await compile(content, compileOptions) as unknown as { code: string, sourceMap?: any }
         logDebug("[COMPILE] In-process compilation successful", file)
 
         mapJson := if needMap && compileRes.sourceMap?
@@ -495,12 +519,17 @@ registerBuildCommand := =>
         .action async =>
             cwd := process.cwd()
             opts := { ...defaultOpts, ...program.opts<Options>() }
+            engine .= null
             try
-                await runBuild(cwd, opts)
+                buildResult := await runBuild(cwd, opts)
+                engine = buildResult.engine
                 console.log c.green("\nCivetman finished building!")
             catch e
                 // runBuild will have already logged details
-                process.exitCode = 1
+                void (process.exitCode = 1)
+            finally
+                if engine?
+                    await engine.pool.shutdown()
                 return
 
 // ---------------- watch mode helpers ----------------
@@ -554,7 +583,15 @@ if !(global as CivetmanGlobal).__civetman_sigint_handler_registered
                 await saveNewState(ctxObj)
             catch _
                 continue
-        console.log("\nCivetman watch stopped (CLI).")
+        // Print shutdown message only once across all processes using a tmp-file lock
+        onceFile := path.join(os.tmpdir(), "civetman_watch_stop_once")
+        shouldLog .= true
+        try
+            fs.writeFileSync(onceFile, process.pid.toString(), { flag: 'wx' })
+        catch _
+            shouldLog = false
+        if shouldLog
+            console.log("\nCivetman watch stopped (CLI).")
         process.exit()
 
 // Helper to add all watch-event listeners to a chokidar watcher instance
@@ -563,9 +600,16 @@ attachWatchHandlers := (watcher: any,
                         cwd: string, 
                         saveStateAndSync: () => void, 
                         engine: BuildEngine) ->
+    timers: Map<string, NodeJS.Timeout> := new Map()
+    scheduleRebuild := (file: string) =>
+        if timers.has(file)
+            clearTimeout(timers.get(file)!)
+        timers.set(file, setTimeout(() =>
+            timers.delete(file)
+            compileNow(file)
+        , 100))
 
-    // This callback defines how a single file event is handled in watch mode.
-    rebuildOne := (file: string) =>
+    compileNow := (file: string) =>
         // Ensure we read the latest file contents; drop any cached entry
         if engine.contentCache? and engine.contentCache.delete?
             engine.contentCache.delete(file)
@@ -605,13 +649,13 @@ attachWatchHandlers := (watcher: any,
         unless ctx.sources.includes(file)
             ctx.sources.push file
             logDebug("[WATCHER_ADD] Added to sources list", file)
-        rebuildOne(file)
+        scheduleRebuild(file)
 
     watcher.on "change", (abs: string) ->
         unless abs.endsWith('.civet') return
         file := path.relative(cwd, abs)
         logDebug("[WATCHER_CHANGE] File changed", file)
-        rebuildOne(file)
+        scheduleRebuild(file)
 
     watcher.on "unlink", async (abs: string) =>
         unless abs.endsWith('.civet') return

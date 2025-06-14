@@ -13,38 +13,46 @@ const workerScriptPath = fileURLToPath(new URL('./workers/compileWorker.cjs', im
 export class WorkerPool
     size: number
     idle: Worker[]
-    pending: { resolve: (w: Worker) => void }[]
+    pending: { resolve: (w: Worker) => void, reject: (err: Error) => void }[]
+    totalWorkers: number
     poolAvailable: boolean
 
     constructor(size = Math.max(1, os.cpus()?.length || 2))
         @size = size
         @idle = []
         @pending = []
-        @poolAvailable = false
-        @checkWorkerScript()
+        @totalWorkers = 0
+        // Do a synchronous existence check to guarantee immediate result
+        @poolAvailable = fs.existsSync(workerScriptPath)
     
+    // async check no longer needed – kept for backwards compatibility (noop)
     async checkWorkerScript()
-        @poolAvailable = await fs.exists(workerScriptPath)
+        return @poolAvailable
 
     // Acquire a worker (waiting if none free)
     acquire(): Promise<Worker>
-        return new Promise (resolve) => 
+        return new Promise (resolve, reject) => 
             if (@idle.length > 0)
                 resolve(@idle.pop()!)
-            else if (@idle.length + @pending.length < @size)
+            else if (@totalWorkers < @size)
                 worker := new Worker(workerScriptPath)
+                @totalWorkers++
                 // Auto-remove workers that exit unexpectedly to keep the pool healthy.
                 worker.on "exit", (code) =>
-                    if code != 0
-                        // Remove from idle list if present.
-                        @idle = @idle.filter((w) => w !== worker)
-                        // Optionally, could log or spawn a replacement here.
+                    // Always decrement the count when a worker ends
+                    @totalWorkers = Math.max(0, @totalWorkers - 1)
+                    // Ensure it is not kept in idle list
+                    @idle = @idle.filter((w) => w !== worker)
+                    // If a worker exits with an error, fail a pending request.
+                    if code != 0 and @pending.length > 0
+                        @pending.shift()!.reject(new Error(`Worker exited with error code: ${code}`))
                 resolve(worker)
             else
-                @pending.push({ resolve })
+                @pending.push({ resolve, reject })
 
     release(worker: Worker)
         if (@pending.length > 0)
+            // Give the worker to the first pending resolver
             @pending.shift()!.resolve(worker)
         else
             @idle.push(worker)
@@ -54,16 +62,46 @@ export class WorkerPool
         worker := await @acquire()
         try
             return await new Promise (resolve, reject) => 
-                handler := (msg: any) =>
-                    worker.off("message", handler)
-                    if (msg.ok) 
+                messageHandler := (msg: any) =>
+                    cleanup()
+                    if msg.ok
                         resolve(msg)
                     else
                         reject(new Error(msg.error))
-                worker.on("message", handler)
+
+                errorHandler := (err: any) =>
+                    cleanup()
+                    reject(err)
+
+                exitHandler := (code: number) =>
+                    cleanup()
+                    if code == 0
+                        reject(new Error("Worker exited before response"))
+                    else
+                        reject(new Error("Worker exited with code " + code))
+
+                cleanup := =>
+                    worker.off("message", messageHandler)
+                    worker.off("error", errorHandler)
+                    worker.off("exit", exitHandler)
+
+                worker.on("message", messageHandler)
+                worker.on("error", errorHandler)
+                worker.on("exit", exitHandler)
                 worker.postMessage(payload)
             
         finally
             @release(worker)    
     
+    async shutdown()
+        for worker of @idle
+            try
+                await worker.terminate()
+            catch _
+                continue
+        @idle = []
+        for p of @pending
+            p.reject(new Error("Pool is shutting down"))
+        @pending = []
+
 export default WorkerPool 

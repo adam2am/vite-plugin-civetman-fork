@@ -11,17 +11,17 @@ unless parentPort
 
 // Listen for a message from the main thread.
 parentPort!.on "message", async (msg) =>
-    { file, content, isTsx } := msg
+    { file, content: initial, isTsx, wantMap, parseOpts } := msg
     try
         // Use provided content when available to avoid an extra disk read.
-        unless content?
-            content := await fs.readFile(file, "utf8")
+        content := if initial? then initial else await fs.readFile(file, "utf8")
         // Perform the compilation.
-        { code, sourceMap } := await compile(content, { filename: file, sourceMap: true })
+        compileOptions := { filename: file, sourceMap: wantMap, ...(parseOpts ? { parseOptions: parseOpts } : {}) }
+        { code, sourceMap } := await compile(content, compileOptions)
         
         // The outFile path is needed to correctly generate the source map.
         outFile := file.replace('.civet', isTsx ? '.tsx' : '.ts')
-        mapJson := sourceMap.json(file, outFile)
+        mapJson := if wantMap then sourceMap.json(file, outFile) else null
         plainMap := JSON.parse(JSON.stringify(mapJson))
 
         // Send the successful result back to the main thread.
