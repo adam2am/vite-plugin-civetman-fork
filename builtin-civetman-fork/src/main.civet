@@ -545,37 +545,3 @@ export default () =>
         opts = { ...defaultOpts, ...program.opts<Options>() };
         ensureGitignoreManifestEntry();
     program.parse process.argv
-
-// --------------------------------------------------------------
-// Layer separation – sketch implementation (state vs. UI)
-// --------------------------------------------------------------
-// BuildContext holds all mutable state so that the pure "file-state" layer
-// does not import ora/picocolors/commander.  By keeping data together we can
-// unit-test compilation logic with plain asserts.
-type BuildContext =
-    opts: Options,
-    manifest: Set<string>,            // generated files from last run
-    hashes: Record<string, { hash: string, outFile: string }>,
-    outFiles: Set<string>,            // produced this run
-    cwd: string
-
-// initialise manifests, tmp cleanup, etc.
-initOutputTracking := async (ctx: BuildContext, civetFiles: Set<string>) =>
-    // TODO: port logic from build/dev that currently loads manifests,
-    // calls cleanupTmpFiles and pruneStaleOutputs.
-    // Should return updated ctx with manifest + hashes pre-populated.
-    return ctx
-
-// compileAll compiles a list of Civet files using a task-queue (p-limit / p-map)
-compileAll := async (ctx: BuildContext, files: string[]) =>
-    // TODO: iterate over files with a concurrency-limited mapper.
-    // For each file decide ts/tsx, compute hash, maybe skip, maybe enqueue
-    // worker_thread compile.  Push final outFile into ctx.outFiles.
-    return ctx
-
-// syncIDEConfigs centralises .gitignore + VS-Code exclude updates.
-syncIDEConfigs := async (ctx: BuildContext) =>
-    // TODO: move addVscodeConfigFileExclude + addGitignore here so the
-    // UI layer just calls this once with ctx.outFiles.
-    return
-// --------------------------------------------------------------

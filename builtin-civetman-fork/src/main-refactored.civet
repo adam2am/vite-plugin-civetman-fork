@@ -474,15 +474,18 @@ attachWatchHandlers := (watcher: any,
             ctx.sources.push file
             logDebug("[WATCHER_ADD] Added to sources list", file)
         rebuildOne(file)
+
     watcher.on "change", (abs: string) ->
         unless abs.endsWith('.civet') return
         file := path.relative(cwd, abs)
         logDebug("[WATCHER_CHANGE] File changed", file)
         rebuildOne(file)
+
     watcher.on "unlink", async (abs: string) =>
         unless abs.endsWith('.civet') return
-        file := path.relative(cwd, abs)
+        file := path.relative(cwd, abs) 
         logDebug("[WATCHER_UNLINK] File removed", file)
+
         ctx.sources = ctx.sources.filter((f: string) => f != file)
         delete ctx.prevHashes[file]
         delete ctx.newHashes[file]
@@ -554,7 +557,12 @@ registerDevCommand := =>
             logDebug("[WATCHER] Setting up watcher in directory:", path.resolve(cwd))
             watcher := createWatcher(cwd)
             logDebug("[WATCHER] Watcher instance created:", !!watcher)
-            attachWatchHandlers(watcher, ctx, cwd, saveStateAndSync, rebuildOne)
+            attachWatchHandlers(
+                watcher, 
+                ctx, 
+                cwd, 
+                saveStateAndSync, 
+                rebuildOne)
             
             process.on "SIGINT", async =>
                 watcher.close()
