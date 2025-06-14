@@ -19,7 +19,9 @@ ora from "ora"
 { compile } from "@danielx/civet"
 { parseTree as jsoncParseTree, findNodeAtLocation as jsoncFindNodeAtLocation, getNodeValue as jsoncGetNodeValue, modify as jsoncModify, applyEdits as jsoncApplyEdits } from "jsonc-parser"
 { createRequire } from "node:module"
+// @ts-ignore
 import { BuildEngine } from "./engine.civet"
+import { loadHashesFromJSONL, appendHashToJSONL } from "./jsonl-helpers.civet"
 
 // ------------------------------------------------------------------
 // Global build fingerprint – any change forces full rebuilds
@@ -43,7 +45,8 @@ type Options =
     mapFiles: boolean,
     outTs?: string[],      // folders
     outTsx?: string[],
-    concurrency?: number
+    concurrency?: number,
+    forcePolling?: boolean
 
 type CompileSuccess = {
     status: "built" | "skip",
@@ -64,7 +67,8 @@ defaultOpts: Options :=
     vscodeHide: true,
     inlineMap: "full",
     mapFiles: false,
-    concurrency: Math.min(2, (os.cpus()?.length || 2))
+    concurrency: Math.min(2, (os.cpus()?.length || 2)),
+    forcePolling: false
 
 // ──────────────────────────────────────────────────────────────
 // Build-state layer – Pure functions operating on BuildContext  
@@ -161,7 +165,7 @@ collectDirs := (val: string, prev: string[]) =>
 // ---------------- manifest helpers (pure fs) ----------------
 manifestDir := (cwd: string) => join(cwd, ".civetman")
 manifestFile := (cwd: string) => join(manifestDir(cwd), "manifest.json")
-hashManifestFile := (cwd: string) => join(manifestDir(cwd), "hashes.json")
+hashManifestFile := (cwd: string) => join(manifestDir(cwd), "hashes.jsonl")
 
 loadJSON := async (file: string, fallback: any) =>
     if await fs.exists(file)
@@ -179,18 +183,20 @@ saveJSON := async (file: string, data: any) =>
 loadPrevState := async (cwd: string) =>
     manifestObj := await loadJSON(manifestFile(cwd), { generated: [] })
     prevGenerated := new Set(manifestObj.generated as string[])
-    rawHashes := await loadJSON(hashManifestFile(cwd), {})
-    // Normalize legacy "hash" field → "sig" for seamless upgrade
-    prevHashes := Object.fromEntries(
-      Object.entries(rawHashes).map(([k, v]: [string, any]) => [k, { sig: v.sig ?? v.hash ?? "", outFile: v.outFile }])
-    ) as Record<string, { sig: string, outFile: string }>
-    { prevGenerated, prevHashes }
+    prevHashes := await loadHashesFromJSONL(hashManifestFile(cwd))
+    return { prevGenerated, prevHashes }
 
 saveNewState := async (ctx: BuildContext) =>
-    logDebug("[STATE] Saving new state", { outFiles: [...ctx.outFiles], hashCount: Object.keys(ctx.newHashes).length })
-    allHashes := { ...ctx.prevHashes, ...ctx.newHashes }
+    logDebug("[STATE] Saving new state", { outFiles: [...ctx.outFiles], newHashCount: Object.keys(ctx.newHashes).length })
+    
+    // Save generated file list (still full write, but it's small)
     await saveJSON(manifestFile(ctx.cwd), { version: 1, generated: [...ctx.outFiles] })
-    await saveJSON(hashManifestFile(ctx.cwd), allHashes)
+
+    // Append new hashes to our JSONL file instead of overwriting.
+    for (const [file, data] of Object.entries(ctx.newHashes)) {
+        await appendHashToJSONL(hashManifestFile(ctx.cwd), { file, ...data })
+    }
+
     logDebug("[STATE] State saved successfully")
 
 // ---------------- compilation (pure, worker-thread ready) ----------------
@@ -460,12 +466,14 @@ registerBuildCommand := =>
                 return
 
 // ---------------- watch mode helpers ----------------
-createWatcher := (cwd: string) ->
+createWatcher := (cwd: string, opts: Options) ->
+    // Polling by default only in CI; can be overridden via --force-polling.
+    usePolling := opts.forcePolling || !!process.env.CI
     chokidar.watch(cwd, {
-        ignored: [/node_modules/, /dist/, /(^|[\/\\])\..*|.*\.civetmantmp$/], // ignore dotfiles and our temp files
+        ignored: [/node_modules/, /dist/, /(^|[\/]\\)\..*|.*\.civetmantmp$/], // ignore dotfiles and our temp files
         persistent: true,
         ignoreInitial: true,
-        usePolling: true, // for max reliability in tests
+        usePolling: usePolling,
         interval: 100,
         binaryInterval: 300,
         awaitWriteFinish: {
@@ -576,7 +584,7 @@ registerDevCommand := =>
             , 800)
 
             logDebug("[WATCHER] Setting up watcher in directory:", path.resolve(cwd))
-            watcher := createWatcher(cwd)
+            watcher := createWatcher(cwd, opts)
             logDebug("[WATCHER] Watcher instance created:", !!watcher)
             attachWatchHandlers(
                 watcher, 
@@ -608,6 +616,7 @@ export default () =>
         .option("--inline-map <mode>", "Inline source map mode", defaultOpts.inlineMap)
         .option("--map-files", "Emit external .map files")
         .option("--concurrency <number>", "Max parallel compilations", (val) => parseInt(val, 10))
+        .option("--force-polling", "Force chokidar polling even outside CI")
 
     registerBuildCommand()
     registerDevCommand()

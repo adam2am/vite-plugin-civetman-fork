@@ -33,18 +33,18 @@ All tasks use `[ ]` check-boxes so they can be ticked off as they land.
 
 ## 2. Stream / Append Manifests Instead of Re-writing
 
-- [ ] **Context**  
+- [x] **Context**  
   `saveNewState` rewrites whole `manifest.json` and `hashes.json`, causing O(total files) IO.
 
-- [ ] **Idea & reasons**  
+- [x] **Idea & reasons**  
   Move to JSON-Lines (one JSON object per line) or a light embedded DB so only changed entries are written, improving performance on large repos.
 
-- [ ] **Potential approach**  
+- [x] **Potential approach**  
   1. Introduce `jsonlAppend(file, obj)` helper.  
   2. On load stream file line-by-line into Map; on save append only new/changed lines.  
   3. Keep a migration path that auto-detects old manifest version and converts.
 
-- [ ] **Relevant places / files**  
+- [x] **Relevant places / files**  
   `loadJSON`, `saveJSON`, `saveNewState` in `main-refactored.civet`; new `helpers/manifest.civet`.
 
 ---
@@ -69,18 +69,18 @@ All tasks use `[ ]` check-boxes so they can be ticked off as they land.
 
 ## 4. Smarter Watcher Defaults
 
-- [ ] **Context**  
+- [x] **Context**  
   Current watcher uses `usePolling: true`, which is reliable but CPU-heavy during dev.
 
-- [ ] **Idea & reasons**  
+- [x] **Idea & reasons**  
   Detect environment: default to native events locally, fall back to polling in CI or when `--force-polling` flag supplied.
 
-- [ ] **Potential approach**  
+- [x] **Potential approach**  
   1. Read `process.env.CI` and a new CLI flag.  
   2. Pass `usePolling` accordingly when creating each chokidar watcher.  
   3. Add docs.
 
-- [ ] **Relevant places / files**  
+- [x] **Relevant places / files**  
   `createWatcher` in `main-refactored.civet`, CLI options definition.
 
 ---
