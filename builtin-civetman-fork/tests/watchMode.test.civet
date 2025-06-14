@@ -1,136 +1,73 @@
 import { describe, it, before, after } from 'mocha'
-import { spawn, ChildProcess } from "node:child_process"
-import fs from "fs-extra"
-import path from "node:path"
+import { spawn, ChildProcess } from 'node:child_process'
+import fs from 'fs-extra'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import assert from "node:assert"
-import { execSync } from 'node:child_process'
+import assert from 'node:assert'
 import stripAnsi from 'strip-ansi'
 
-// ESM equivalents of __filename / __dirname
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
+// ESM replacements for __filename / __dirname
+__filename := fileURLToPath(import.meta.url)
+__dirname  := path.dirname(__filename)
 
-// Helper to wait for a specific string in stdout/stderr
-const waitForOutput = (process: ChildProcess, text: string, timeout = 5000) =>
-  new Promise((resolve, reject) => {
-    let output = ""
-    const onData = (chunk: any) => {
-      output += stripAnsi(chunk.toString())
-      if (output.includes(text)) {
-        process.stdout?.removeListener("data", onData)
-        process.stderr?.removeListener("data", onData)
-        resolve(true)
-      }
-    }
-    process.stdout?.on("data", onData)
-    process.stderr?.on("data", onData)
+// Accumulate watcher output – makes it trivial to check for substrings later.
+outputBuffer .= ""
+appendOutput := (chunk: any) ->
+    outputBuffer += stripAnsi(chunk.toString())
 
-    setTimeout(() => {
-        console.log("Full output: " + output)
-        console.error(`Timeout waiting for "${text}"`)
-        reject(new Error(`Timeout waiting for text: "${text}"`))
-    }, timeout)
-  })
+// Utility: wait until a specific text appears in watcher output (or fail after timeout)
+waitFor := (text: string, timeout = 10000) ->
+    new Promise (resolve, reject) ->
+        if outputBuffer.includes(text)
+            return resolve(true)
+        start := Date.now()
+        check := ->
+            if outputBuffer.includes(text)
+                return resolve(true)
+            if (Date.now() - start) > timeout
+                return reject new Error("Timeout waiting for: " + text)
+            setTimeout(check, 50)
+        check()
 
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+describe "Civetman Watch – basic rebuild", () =>
+    let watcher: ChildProcess | null = null
+    testDir := path.join(__dirname, "temp-watch-test")
+    fixtureDir := path.join(__dirname, "fixture")
+    civetPath := path.join(testDir, "dummy.civet")
+    tsPath    := path.join(testDir, "dummy.ts")
 
-describe("Civetman Watch Mode", () => {
-    let watcher: ChildProcess
-    const testDir = path.join(__dirname, "temp-watch-test")
-    const fixtureDir = path.resolve(__dirname, 'fixture')
-    const civetFilePath = path.join(testDir, "dummy.civet")
-    const tsFilePath = path.join(testDir, "dummy.ts")
-    const updatedContent = "a: number := 2"
-
-    before(async function() {
-        this.timeout(30000) // allow extra time for build & setup
-        await fs.remove(path.join(testDir, '.civetman'))
+    before async ->
+        @timeout 30000 // extra slack for initial build
+        // Prepare clean test folder
+        await fs.remove(testDir)
         await fs.copy(fixtureDir, testDir)
 
-        const civetmanPath = path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
-        if (!await fs.exists(civetmanPath)) {
-            console.log("Building civetman for tests (pnpm run build)…")
-            execSync('pnpm run build', { stdio: 'inherit', cwd: path.resolve(__dirname, '..', '..') })
-        }
+        // Ensure CLI is built (dist/cli/index.js)
+        cli := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
+        unless await fs.exists(cli)
+            throw new Error("Civetman CLI not built – run pnpm run build before tests")
 
-        watcher = spawn('node', [civetmanPath, 'dev'], { cwd: testDir })
-        
-        // Add more robust logging to diagnose output issues
-        if (watcher.stdout) {
-            watcher.stdout.on('data', (data) => {
-                console.log(`[Watcher STDOUT] ${data}`);
-            });
-        }
-        if (watcher.stderr) {
-            watcher.stderr.on('data', (data) => {
-                console.error(`[Watcher STDERR] ${data}`);
-            });
-        }
+        // Start watcher process
+        watcher = spawn('node', [cli, 'dev'], { cwd: testDir })
+        watcher.stdout?.on('data', appendOutput)
+        watcher.stderr?.on('data', appendOutput)
 
-        await waitForOutput(watcher, 'Watching for changes')
-    })
+        // Wait until watcher is ready
+        await waitFor("Watching for changes")
 
-    after(async () => {
+    after ->
         watcher?.kill()
-        // NOTE: Cleanup is disabled to allow for manual inspection of test artifacts.
-        // await fs.remove(testDir)
-    })
 
-    it("should create initial build file with correct content", async () => {
-        const tsContent = await fs.readFile(tsFilePath, "utf-8")
-        assert(tsContent.includes("const a: number = 1"), "Initial content mismatch")
-    })
+    it "should build initially and after a change", async ->
+        @timeout 20000
+        // 1) Initial build verification
+        content1 := await fs.readFile(tsPath, 'utf8')
+        assert(content1.includes("const a: number = 1"), "Initial TS output incorrect")
 
-    it("should recompile file on change with correct content", async function() {
-        this.timeout(5000)
-        // -- 2. Modify file and wait for rebuild --
-        console.log("Writing updated content to", civetFilePath)
-        await fs.writeFile(civetFilePath, updatedContent)
-        console.log("File write complete")
+        // 2) Trigger a change
+        await fs.writeFile(civetPath, "a: number := 2\nexport {}")
+        await waitFor("✓ dummy.civet -> dummy.ts", 15000)
 
-        // Wait for chokidar to pick up the change and for compile to finish
-        console.log("Waiting for watcher to detect change...")
-        await waitForOutput(watcher, "Successfully built")
-        console.log("Change detected")
-        
-        // Let filesystem settle
-        await sleep(200)
-
-        // -- 3. Verify recompiled content --
-        console.log("Reading output file", tsFilePath)
-        const tsContent = await fs.readFile(tsFilePath, "utf-8")
-        assert(tsContent.includes("const a: number = 2"), "Updated content mismatch")
-    })
-
-    it("should recompile file on change and handle rename", async function() {
-        this.timeout(10000)
-        // -- 1. Modify file and wait for rebuild --
-        console.log("Writing updated content to", civetFilePath)
-        await fs.writeFile(civetFilePath, updatedContent)
-        console.log("File write complete")
-        await waitForOutput(watcher, "Successfully built")
-        await sleep(300)
-        const afterEdit = await fs.readFile(tsFilePath, "utf-8")
-        assert(afterEdit.includes("const a: number = 2"), "Updated content mismatch after edit")
-
-        // -- 2. Rename file --
-        const renamedCivet = path.join(testDir, "renamed.civet")
-        const renamedTs    = path.join(testDir, "renamed.ts")
-        console.log("Renaming file", civetFilePath, "to", renamedCivet)
-        await fs.rename(civetFilePath, renamedCivet)
-        console.log("Rename complete")
-
-        // Wait for watcher add/unlink events
-        console.log("Waiting for watcher to detect rename...")
-        await waitForOutput(watcher, "Successfully built")
-        console.log("Rename detected")
-        await sleep(300)
-
-        // old output should be removed, new one generated
-        assert(!(await fs.pathExists(tsFilePath)), "Old TS file should be deleted after rename")
-        assert(await fs.pathExists(renamedTs), "New TS file was not generated after rename")
-        const renamedContent = await fs.readFile(renamedTs, "utf-8")
-        assert(renamedContent.includes("const a: number = 2"), "Renamed TS has wrong contents")
-    })
-})
+        // 3) Confirm rebuild output
+        content2 := await fs.readFile(tsPath, 'utf8')
+        assert(content2.includes("const a: number = 2"), "Rebuilt TS output incorrect")

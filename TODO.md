@@ -57,18 +57,18 @@ read file       ───►  compile(content)  │
 write .ts/.tsx │  ◄──  {code, map}      │
 state updates   │
 
-- [ ] **Context**  
+- [x] **Context**  
   Compilation is CPU-bound but still runs on the main thread; `p-limit` restricts concurrency but doesn't scale across cores.
 
-- [ ] **Idea & reasons**  
+- [x] **Idea & reasons**  
   Off-load `compileSource` to a worker pool to utilise multi-core CPUs → faster cold builds.
 
-- [ ] **Potential approach**  
+- [x] **Potential approach**  
   1. Add `worker_threads` pool utility (`utils/workerPool.ts`).  
   2. Wrap `compileSource` behind an adapter that decides between in-process vs worker based on `opts.concurrency`.  
   3. Pass only serialisable data (file path & options) to workers.
 
-- [ ] **Relevant places / files**  
+- [x] **Relevant places / files**  
   `compileSource` in `main-refactored.civet`, new `workers/compileWorker.cjs`.
 
 ---

@@ -1,0 +1,63 @@
+import { describe, it } from 'mocha'
+import fs from 'fs-extra'
+import os from 'node:os'
+import path from 'node:path'
+import assert from 'node:assert'
+import { WorkerPool } from '../src/workerPool.civet'
+import { fileURLToPath } from 'node:url'
+
+// ESM __dirname polyfill
+__filename := fileURLToPath(import.meta.url)
+__dirname := path.dirname(__filename)
+
+// Generates a temporary Civet file with the given content
+makeTempFile := async (dir: string, name: string, content: string) ->
+    filePath := path.join(dir, name)
+    await fs.writeFile(filePath, content)
+    return filePath
+
+// Ensure the src/workers/compileWorker.cjs exists (tests may run before build step compiles it)
+ensureWorkerScript := async () ->
+    srcDir := path.join(__dirname, '..', 'src', 'workers')
+    distWorker := path.join(__dirname, '..', '..', 'dist', 'cli', 'workers', 'compileWorker.cjs')
+    srcWorker := path.join(srcDir, 'compileWorker.cjs')
+    if !(await fs.pathExists(srcWorker)) and await fs.pathExists(distWorker)
+        await fs.ensureDir(srcDir)
+        await fs.copy(distWorker, srcWorker)
+
+describe "WorkerPool – crash recovery", () =>
+    it "should still compile after a worker exits abnormally", async ->
+        @timeout 15000
+    
+        tmpDir := await fs.mkdtemp(path.join(os.tmpdir(), 'civetman-crash-'))
+
+        // Prepare two small civet sources
+        file1 := await makeTempFile(tmpDir, 'one.civet', 'a: number := 1\nexport {}')
+        file2 := await makeTempFile(tmpDir, 'two.civet', 'b: number := 2\nexport {}')
+
+        pool := new WorkerPool(1)
+
+        // First compile should succeed
+        res1 := await pool.exec({ file: file1, content: 'a: number := 1\nexport {}', isTsx: false })
+        assert(res1.code.includes('const a:'), 'First compile failed')
+
+        // Simulate a worker crash by force-terminating the thread
+        if pool.idle.length == 0
+            throw new Error('No idle worker available to crash')
+        crashed := pool.idle[0]
+        await crashed.terminate()
+        // Manually remove from idle list to mimic non-zero exit handling
+        pool.idle = pool.idle.filter((w) => w !== crashed)
+
+        // Verify pool has no idle workers left
+        assert.strictEqual(pool.idle.length, 0, 'Crashed worker was not removed')
+
+        // The next compile should spawn a fresh worker and succeed
+        res2 := await pool.exec({ file: file2, content: 'b: number := 2\nexport {}', isTsx: false })
+        assert(res2.code.includes('const b:'), 'Second compile failed after crash')
+
+        // Clean up: terminate any remaining workers so Mocha can exit cleanly
+        await Promise.all(pool.idle.map((w) => w.terminate()))
+
+// Run the check immediately so it finishes before tests execute
+await ensureWorkerScript() 

@@ -46,7 +46,8 @@ type Options =
     outTs?: string[],      // folders
     outTsx?: string[],
     concurrency?: number,
-    forcePolling?: boolean
+    forcePolling?: boolean,
+    plugin?: string[]
 
 type CompileSuccess = {
     status: "built" | "skip",
@@ -68,7 +69,8 @@ defaultOpts: Options :=
     inlineMap: "full",
     mapFiles: false,
     concurrency: Math.min(2, (os.cpus()?.length || 2)),
-    forcePolling: false
+    forcePolling: false,
+    plugin: []
 
 // ──────────────────────────────────────────────────────────────
 // Build-state layer – Pure functions operating on BuildContext  
@@ -93,6 +95,18 @@ export type BuildContext =
 
 computeHash := (input: string): string =>
     createHash("sha1").update(input).digest("hex")
+
+// Computes the deterministic build signature shared by all build paths.
+// This centralises the formula so changes happen in one place.
+export makeSignature := (
+    content: string,
+    opts: { tsx: boolean, inlineMap: string | boolean | any, mapFiles: boolean }
+) : string =>
+    computeHash(
+        content +
+        JSON.stringify({ tsx: opts.tsx, inlineMap: opts.inlineMap, mapFiles: opts.mapFiles }) +
+        buildFingerprint
+    )
 
 // ---------------- debug ----------------
 // Debug logging – enable by setting CIVETMAN_DEBUG env var.
@@ -244,11 +258,7 @@ export compileSource := async (ctx: BuildContext, file: string): Promise<Compile
 
     // compute deterministic signature for incremental builds ------------
     const content = await fs.readFile(file, "utf8")
-    const signature = computeHash(
-        content +
-        JSON.stringify({ tsx: isTsx, inlineMap: ctx.opts.inlineMap, mapFiles: ctx.opts.mapFiles }) +
-        buildFingerprint
-    )
+    const signature = makeSignature(content, { tsx: isTsx, inlineMap: ctx.opts.inlineMap, mapFiles: ctx.opts.mapFiles })
 
     const prev = ctx.prevHashes[file]
     logDebug("[COMPILE] Sig check", { file, signature, prevSig: prev?.sig })
@@ -480,7 +490,19 @@ registerBuildCommand := =>
             cwd := process.cwd()
             opts := { ...defaultOpts, ...program.opts<Options>() }
             try
-                await runBuild(cwd, opts)
+                { ctx, engine } := await runBuild(cwd, opts)
+
+                for pluginPath of (opts.plugin ?? [])
+                    try
+                        resolved := path.isAbsolute(pluginPath) ? pluginPath : join(cwd, pluginPath)
+                        mod := await import(resolved)
+                        if typeof mod.default == "function"
+                            mod.default(engine.events)
+                        else if typeof mod == "function"
+                            mod(engine.events)
+                    catch e
+                        console.error("Failed to load plugin", pluginPath, e)
+
                 console.log c.green("\nCivetman finished building!")
             catch e
                 // runBuild will have already logged details
@@ -594,6 +616,18 @@ registerDevCommand := =>
         try
             console.log c.blue("Civetman starts building in watch mode…\n")
             { ctx, engine } := await runBuild(cwd, opts)
+
+            for pluginPath of (opts.plugin ?? [])
+                try
+                    resolved := path.isAbsolute(pluginPath) ? pluginPath : join(cwd, pluginPath)
+                    mod := await import(resolved)
+                    if typeof mod.default == "function"
+                        mod.default(engine.events)
+                    else if typeof mod == "function"
+                        mod(engine.events)
+                catch e
+                    console.error("Failed to load plugin", pluginPath, e)
+
             console.log c.green("Initial build complete! Watching for changes…\n")
             
             saveStateAndSync := debounce(async =>
@@ -639,6 +673,7 @@ export default () =>
         .option("--map-files", "Emit external .map files")
         .option("--concurrency <number>", "Max parallel compilations", (val) => parseInt(val, 10))
         .option("--force-polling", "Force chokidar polling even outside CI")
+        .option("--plugin <path>", "Load plugin file (repeatable or comma-separated)", collectDirs, [] as string[])
 
     registerBuildCommand()
     registerDevCommand()

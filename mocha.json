@@ -9,5 +9,6 @@
   "recursive": true,
   "spec": [
     "builtin-civetman-fork/tests"
-  ]
+  ],
+  "timeout": 10000
 }

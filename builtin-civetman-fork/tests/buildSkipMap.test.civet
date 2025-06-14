@@ -1,0 +1,52 @@
+import { describe, it } from 'mocha'
+import fs from 'fs-extra'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import assert from 'node:assert'
+import os from 'node:os'
+import stripAnsi from 'strip-ansi'
+import { fileURLToPath } from 'node:url'
+
+// __dirname polyfill for ESM
+__filename := fileURLToPath(import.meta.url)
+__dirname  := path.dirname(__filename)
+
+runBuild := (cwd: string, extraArgs: string[] = []) ->
+    cli := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
+    unless fs.existsSync(cli)
+        throw new Error('Civetman CLI not built – run pnpm run build')
+    result := spawnSync('node', [cli, 'build', '--map-files', ...extraArgs], { cwd, encoding: 'utf8' })
+    if result.status != 0
+        console.error(stripAnsi(result.stdout + result.stderr))
+        throw new Error('Build failed')
+    return stripAnsi(result.stdout + result.stderr)
+
+describe "Build – source map & skip logic", () =>
+    it "creates .map files and skips on second build", async ->
+
+        tmpDir := await fs.mkdtemp(path.join(os.tmpdir(), 'civetman-build-'))
+        fixtureDir := path.join(__dirname, 'fixture')
+        await fs.copy(fixtureDir, tmpDir)
+
+        tsFile  := path.join(tmpDir, 'dummy.ts')
+        mapFile := tsFile + '.map'
+
+        // --- First build ---
+        runBuild(tmpDir, ['--concurrency','1'])
+        assert(await fs.pathExists(tsFile), 'TS file missing after first build')
+        assert(await fs.pathExists(mapFile), '.map file missing after first build')
+
+        tsContent := await fs.readFile(tsFile, 'utf8')
+        assert(tsContent.includes('sourceMappingURL'), 'Missing sourceMappingURL comment')
+
+        // Capture timestamps before second build
+        tsMtimeBefore := (await fs.stat(tsFile)).mtimeMs
+        mapMtimeBefore := (await fs.stat(mapFile)).mtimeMs
+
+        // --- Second build (no changes) ---
+        runBuild(tmpDir, ['--concurrency','1'])
+        tsMtimeAfter := (await fs.stat(tsFile)).mtimeMs
+        mapMtimeAfter := (await fs.stat(mapFile)).mtimeMs
+
+        assert.strictEqual(tsMtimeAfter, tsMtimeBefore, 'TS regenerated unnecessarily')
+        assert.strictEqual(mapMtimeAfter, mapMtimeBefore, '.map regenerated unnecessarily')

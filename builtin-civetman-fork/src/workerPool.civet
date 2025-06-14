@@ -33,6 +33,12 @@ export class WorkerPool
                 resolve(@idle.pop()!)
             else if (@idle.length + @pending.length < @size)
                 worker := new Worker(workerScriptPath)
+                // Auto-remove workers that exit unexpectedly to keep the pool healthy.
+                worker.on "exit", (code) =>
+                    if code != 0
+                        // Remove from idle list if present.
+                        @idle = @idle.filter((w) => w !== worker)
+                        // Optionally, could log or spawn a replacement here.
                 resolve(worker)
             else
                 @pending.push({ resolve })
