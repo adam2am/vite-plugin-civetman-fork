@@ -1,40 +1,118 @@
-# TODO – Make `src/main-refactored.civet` production-ready
+# Civetman Refactor Road-map
+──────────────────────────────
+Expected impact on scores
+──────────────────────────────
+Scalability +1 (worker pool, streaming manifests)
+Robustness +1 (single engine, fewer code paths)
+Clarity ≈ (stays high; engine class is easier to grok)
+Future-proofing +1 (plugin bus)
+Performance +2 (no polling by default + multi-core compile + less IO)
+i.e. v1 could realistically reach ~8–9 across the board with the above refactors.
 
-1. [x] Remove duplicate *placeholder* block (≈ lines 400-440) that redeclares `compileAll`, `syncIDEConfigs`, etc. – these empty stubs currently shadow the real implementations.
+All tasks use `[ ]` check-boxes so they can be ticked off as they land.
 
-2. [x] Build-state initialisation
-   • [x] Implement `initOutputTracking(ctx, civetFiles)`
-     – Load `.civetman/manifest.json` and `hashes.json`.
-     – Call `cleanupTmpFiles` for all potential outputs.
-     – Populate `ctx.prevGenerated` / `ctx.prevHashes` and return updated ctx.
+---
 
-3. [x] Compilation queue
-   • [x] Complete `compileAll(ctx)`
-     – Use `p-limit` with `ctx.opts.concurrency`.
-     – For each source file:
-         a. Decide ts/tsx via `resolveOutputType(ctx, file)`.
-         b. Compute sha1, compare against `ctx.prevHashes`.
-         c. Call `compileSource(ctx, file)` when rebuild is required.
+## 1. Merge Build & Watch Pipelines into a Single Engine
 
-4. [x] IDE / VCS hygiene
-   • [x] Implement `syncIDEConfigs(ctx)`.
-     – Move logic from `addVscodeExcludes` + `addGitignoreEntries` into this helper so the UI layer only calls one function.
+- [x] **Context**  
+  `runBuild → compileAll` (one-shot) and the `rebuildOne` logic in watch mode are near duplicates, leading to drift and bugs.
 
-5. [x] Error reporting
-   • [x] Add coloured banner / exit-code handling around `compileSource` (reuse `compileFile` pattern from original version).
+- [x] **Idea & reasons**  
+  Factor out a reusable `BuildEngine` that exposes `buildAll`, `build(file)`, and `remove(file)`.  One code-path means fewer edge-cases and boosts robustness.
 
-6. [x] Hash manifest & pruning
-   • [x] Ensure `saveNewState(ctx)` persists both generated files and hash map.
-   • [x] Bring back stale-output pruning parity with old `pruneStaleOutputs`.
+- [x] **Potential approach**  
+  1. Create `src/engine.civet` housing an `Engine` class that stores `ctx`, a `p-limit` pool, and a dedupe map.  
+  2. Re-implement `runBuild` and watch-mode so they simply call engine APIs.  
+  3. Delete/deprecate duplicated helpers in `main-refactored.civet`.
 
-7. [x] Watch mode
-   • [x] After each rebuild in `registerDevCommand`:
-       – Update `ctx.prevHashes` with `ctx.newHashes`.
-       – Call `syncIDEConfigs(ctx)` so VSCode + .gitignore stay current.
+- [x] **Relevant places / files**  
+  `builtin-civetman-fork/src/main-refactored.civet` (sections compileAll + watch), new `src/engine.civet`, test updates.
 
-8. Tests
-   • Port existing vitest suites to exercise refactored helpers.
-   • Add regression tests for `resolveOutputType` folder routing logic.
+---
 
-9. Documentation
-   • Update README with new CLI options / architecture notes once refactor is complete.
+## 2. Stream / Append Manifests Instead of Re-writing
+
+- [ ] **Context**  
+  `saveNewState` rewrites whole `manifest.json` and `hashes.json`, causing O(total files) IO.
+
+- [ ] **Idea & reasons**  
+  Move to JSON-Lines (one JSON object per line) or a light embedded DB so only changed entries are written, improving performance on large repos.
+
+- [ ] **Potential approach**  
+  1. Introduce `jsonlAppend(file, obj)` helper.  
+  2. On load stream file line-by-line into Map; on save append only new/changed lines.  
+  3. Keep a migration path that auto-detects old manifest version and converts.
+
+- [ ] **Relevant places / files**  
+  `loadJSON`, `saveJSON`, `saveNewState` in `main-refactored.civet`; new `helpers/manifest.civet`.
+
+---
+
+## 3. Worker-Thread Pool for Compilation
+
+- [ ] **Context**  
+  Compilation is CPU-bound but still runs on the main thread; `p-limit` restricts concurrency but doesn't scale across cores.
+
+- [ ] **Idea & reasons**  
+  Off-load `compileSource` to a worker pool to utilise multi-core CPUs → faster cold builds.
+
+- [ ] **Potential approach**  
+  1. Add `worker_threads` pool utility (`utils/workerPool.ts`).  
+  2. Wrap `compileSource` behind an adapter that decides between in-process vs worker based on `opts.concurrency`.  
+  3. Pass only serialisable data (file path & options) to workers.
+
+- [ ] **Relevant places / files**  
+  `compileSource` in `main-refactored.civet`, new `workers/compileWorker.cjs`.
+
+---
+
+## 4. Smarter Watcher Defaults
+
+- [ ] **Context**  
+  Current watcher uses `usePolling: true`, which is reliable but CPU-heavy during dev.
+
+- [ ] **Idea & reasons**  
+  Detect environment: default to native events locally, fall back to polling in CI or when `--force-polling` flag supplied.
+
+- [ ] **Potential approach**  
+  1. Read `process.env.CI` and a new CLI flag.  
+  2. Pass `usePolling` accordingly when creating each chokidar watcher.  
+  3. Add docs.
+
+- [ ] **Relevant places / files**  
+  `createWatcher` in `main-refactored.civet`, CLI options definition.
+
+---
+
+## 5. Public Plugin / Event Hooks
+
+- [ ] **Context**  
+  Users may want to run extra steps (e.g. minify, lint) without forking core.
+
+- [ ] **Idea & reasons**  
+  Expose an internal `EventEmitter` that fires `compiled`, `skipped`, `deleted` etc.  CLI can load external JS plugins that subscribe, improving future-proofing.
+
+- [ ] **Potential approach**  
+  1. Add `events` property to `BuildEngine`.  
+  2. Introduce `--plugin <file>` CLI flag that dynamically imports modules and hands them the emitter.  
+  3. Document simple "hello-plugin" example.
+
+- [ ] **Relevant places / files**  
+  New `plugins` folder, `BuildEngine`, CLI wiring in `main-refactored.civet`.
+
+---
+
+## 6. Micro-optimisations & Housekeeping
+
+- [ ] Cache file contents + hashes in memory during watch to avoid redundant disk reads.  
+- [ ] Skip `sourceMap.json()` call when both `inlineMap === 'none'` and `!opts.mapFiles`.  
+- [ ] Switch `debounce` helper to execute immediately on first call (`leading`) then batch later calls.  
+- [ ] Tighten types and remove any `as any` casts.  
+- [ ] Add unit benchmarks for cold vs. warm builds.
+
+Relevant areas: `compileSource`, debounce util, tests/benchmarks.
+
+---
+
+**End of list** 

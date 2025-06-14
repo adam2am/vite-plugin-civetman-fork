@@ -1,0 +1,75 @@
+// --------------------------------------------------------------
+// engine.civet – shared BuildEngine for build & watch pipelines
+// --------------------------------------------------------------
+
+pLimit from "p-limit"
+fs from "fs-extra"
+
+// Import compileSource and types from the main module for now.
+// Later we may extract them into a separate pure module.
+{ compileSource } from "./main-refactored.civet"
+
+// BuildContext type re-exported from main-refactored so we stay DRY.
+{ type BuildContext, type CompileResult } from "./main-refactored.civet"
+
+export class BuildEngine {
+    ctx: BuildContext
+    limitFn: Function
+    inFlight: Map<string, Promise<any>>
+
+    constructor(ctx: BuildContext)
+        @ctx = ctx
+        // Use same concurrency heuristic as current code path.
+        const concurrency = Math.max(1, ctx.opts.concurrency ?? 2)
+        @limitFn = pLimit(concurrency)
+        @inFlight = new Map<string, Promise<any>>()
+
+
+    // Build / rebuild *all* sources currently in ctx.sources
+    async buildAll(onProgress?: (result: CompileResult) => void)
+        tasks := this.ctx.sources.map((file) => this.build(file, onProgress))
+        await Promise.allSettled(tasks)
+    
+
+    // Build a single file. Dedupe if already in progress.
+    build(file: string, onProgress?: (result: CompileResult) => void) 
+        if @inFlight.has(file)
+            return @inFlight.get(file)!
+
+        task := @limitFn async =>
+            try
+                result := await compileSource(this.ctx, file)
+                onProgress?.(result)
+                return result
+            catch error
+                onProgress?.({ file, status: 'error', error: error })
+                // Do not rethrow, allowing Promise.allSettled to continue with other files.
+        
+        // Track promise for deduplication.
+        @inFlight.set(file, task)
+        // Clean up once finished.
+        task.finally(() => @inFlight.delete(file))
+        return task
+    
+
+    // Handle a source deletion.
+    async remove(file: string)
+        // Remove from source list and hashes; delete outputs if they exist.
+        @ctx.sources = @ctx.sources.filter((f) => f !== file)
+        delete @ctx.prevHashes[file]
+        delete @ctx.newHashes[file]
+
+        tsFile := file.replace(".civet", ".ts")
+        tsxFile := file.replace(".civet", ".tsx")
+        for out of [tsFile, tsxFile]
+            try
+                if (await fs.exists(out))
+                    await fs.unlink(out)
+                if (await fs.exists(out + ".map")) 
+                    await fs.unlink(out + ".map")     
+            catch _
+                // best-effort
+            @ctx.outFiles.delete(out)
+            @ctx.outFiles.delete(out + ".map")
+ }
+

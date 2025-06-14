@@ -10,7 +10,6 @@ c from "picocolors"
 { program } from "commander"
 fs from "fs-extra"
 glob from "fast-glob"
-pLimit from "p-limit"
 { join } from "node:path"
 path from "node:path"
 os from "node:os"
@@ -20,6 +19,7 @@ ora from "ora"
 { compile } from "@danielx/civet"
 { parseTree as jsoncParseTree, findNodeAtLocation as jsoncFindNodeAtLocation, getNodeValue as jsoncGetNodeValue, modify as jsoncModify, applyEdits as jsoncApplyEdits } from "jsonc-parser"
 { createRequire } from "node:module"
+import { BuildEngine } from "./engine.civet"
 
 // ------------------------------------------------------------------
 // Global build fingerprint – any change forces full rebuilds
@@ -45,6 +45,19 @@ type Options =
     outTsx?: string[],
     concurrency?: number
 
+type CompileSuccess = {
+    status: "built" | "skip",
+    file: string,
+    outFile: string,
+    signature: string
+}
+type CompileError = {
+    status: "error",
+    file: string,
+    error: any
+}
+export type CompileResult = CompileSuccess | CompileError
+
 defaultOpts: Options :=
     tsx: false,
     gitIgnore: true,
@@ -58,7 +71,7 @@ defaultOpts: Options :=
 // ──────────────────────────────────────────────────────────────
 
 // A central object that holds all mutable state. Tests can mock it easily.
-type BuildContext =
+export type BuildContext =
     opts: Options,
     cwd: string,
     // list of civet source files (fixed for single build run)
@@ -181,7 +194,7 @@ saveNewState := async (ctx: BuildContext) =>
     logDebug("[STATE] State saved successfully")
 
 // ---------------- compilation (pure, worker-thread ready) ----------------
-compileSource := async (ctx: BuildContext, file: string) => {
+export compileSource := async (ctx: BuildContext, file: string): Promise<CompileResult> => {
     // decide output type & expected filename
     isTsx := resolveOutputType(ctx, file)
     expectedOut := fileToOutFile(file, isTsx)
@@ -240,24 +253,6 @@ compileSource := async (ctx: BuildContext, file: string) => {
     catch e
         // propagate error – UI layer decides what to log/exit
         throw e
-}
-
-// ---------------- task-queue orchestrator ----------------
-compileAll := async (ctx: BuildContext, onProgress?: (result: any) => void) => {
-    concurrency: number := Math.max(1, ctx.opts.concurrency ?? defaultOpts.concurrency ?? 2)
-    limitFn := pLimit(concurrency)
-
-    handleResult := (promise: Promise<any>, file: string) =>
-        promise.then((value: any) => {
-            onProgress?.({ ...value, status: value.status })
-        }).catch((error: any) => {
-            onProgress?.({ file, status: 'error', error })
-            throw error
-        })
-    
-    tasks := ctx.sources.map((file) => limitFn(() => handleResult(compileSource(ctx, file), file)))
-    
-    return Promise.allSettled(tasks)
 }
 
 // ---------------- side-effect helpers (IDE, gitignore) ----------------
@@ -393,6 +388,9 @@ runBuild := async (cwd: string, opts: Options) =>
         prevHashes: prevHashes,
         newHashes: {}
 
+    // Create the build engine which orchestrates compilation.
+    engine := new BuildEngine(ctx)
+
     // Step 3: build all, with progress reporting
     spinner := ora(c.blue("Building Civet files")).start()
     hadError .= false
@@ -413,7 +411,7 @@ runBuild := async (cwd: string, opts: Options) =>
             console.error(res.error)
     }
 
-    await compileAll(ctx, onProgress)
+    await engine.buildAll(onProgress)
     
     finalMessage .= `Built ${builtCount} file(s)`
     if skippedCount > 0
@@ -440,7 +438,7 @@ runBuild := async (cwd: string, opts: Options) =>
     ctx.prevHashes = { ...ctx.prevHashes, ...ctx.newHashes }
     ctx.newHashes = {}
 
-    return ctx
+    return { ctx, engine }
 
 // ──────────────────────────────────────────────────────────────
 // UI layer – Responsible for colours, spinners, CLI exit codes   
@@ -501,7 +499,26 @@ attachWatchHandlers := (watcher: any,
                         ctx: BuildContext, 
                         cwd: string, 
                         saveStateAndSync: () => void, 
-                        rebuildOne: (file: string) => void) ->
+                        engine: BuildEngine) ->
+
+    // This callback defines how a single file event is handled in watch mode.
+    rebuildOne := (file: string) =>
+        engine.build(file, (result: CompileResult) => {
+            if result.status == 'built'
+                ctx.prevHashes[file] = ctx.newHashes[file] = { sig: result.signature!, outFile: result.outFile! }
+                logDebug("[REBUILD_ONE] Built", file, "->", result.outFile!)
+                console.log c.green('  ✓ ' + c.cyan(result.file) + " -> " + c.green(result.outFile!))
+            else if result.status == 'skip'
+                // update hashes on skip to prevent re-runs
+                ctx.prevHashes[file] = ctx.newHashes[file] = { sig: result.signature!, outFile: result.outFile! }
+                logDebug("[REBUILD_ONE] Skipped (up to date)", file)
+            else if result.status == 'error'
+                logDebug("[REBUILD_ONE] Error compiling", file, result.error)
+                console.error("Civetman error compiling", file, result.error)
+            
+            saveStateAndSync()
+        })
+
     watcher.on 'ready', ->
         logDebug("[WATCHER] Initial scan complete and ready for changes")
         logDebug("[WATCHER] Watched paths:", watcher.getWatched())
@@ -534,25 +551,7 @@ attachWatchHandlers := (watcher: any,
         unless abs.endsWith('.civet') return
         file := path.relative(cwd, abs) 
         logDebug("[WATCHER_UNLINK] File removed", file)
-
-        ctx.sources = ctx.sources.filter((f: string) => f != file)
-        delete ctx.prevHashes[file]
-        delete ctx.newHashes[file]
-        tsFile := fileToOutFile(file, false)
-        tsxFile := fileToOutFile(file, true)
-        for out of [tsFile, tsxFile]
-            try {
-                if await fs.exists(out)
-                    logDebug("[WATCHER_UNLINK] Removing output file", out)
-                    await fs.unlink(out)
-                if await fs.exists(out + ".map")
-                    logDebug("[WATCHER_UNLINK] Removing map file", out + ".map")
-                    await fs.unlink(out + ".map")
-            } catch (e) {
-                logDebug("[WATCHER_UNLINK] Error removing file", out, e)
-            }
-            ctx.outFiles.delete(out)
-            ctx.outFiles.delete(out + ".map")
+        await engine.remove(file)
         saveStateAndSync()
 
 // ---------------- watch mode ----------------
@@ -564,7 +563,7 @@ registerDevCommand := =>
         opts := { ...defaultOpts, ...program.opts<Options>() }
         try
             console.log c.blue("Civetman starts building in watch mode…\n")
-            ctx := await runBuild(cwd, opts)
+            { ctx, engine } := await runBuild(cwd, opts)
             console.log c.green("Initial build complete! Watching for changes…\n")
             
             saveStateAndSync := debounce(async =>
@@ -576,38 +575,6 @@ registerDevCommand := =>
                 logDebug("[STATE_SYNC] State sync complete")
             , 800)
 
-            // Shared limiter & de-duplication for watch-mode rebuilds
-            limitFn := pLimit(Math.max(1, opts.concurrency ?? defaultOpts.concurrency ?? 2))
-            inFlight := new Map<string, Promise<any>>()
-
-            rebuildOne := (file: string) ->
-                if inFlight.has(file)
-                    logDebug("[REBUILD_ONE] Already building", file)
-                    return
-
-                task := limitFn(async () =>
-                    logDebug("[REBUILD_ONE] Starting compile for", file)
-                    try
-                        result := await compileSource(ctx, file)
-                        // Immediate state update to prevent re-runs from rapid-fire events
-                        if result.status == 'built'
-                            ctx.prevHashes[file] = ctx.newHashes[file] = { sig: result.signature, outFile: result.outFile }
-                            logDebug("[REBUILD_ONE] Built", file, "->", result.outFile)
-                            console.log c.green('  ✓ ' + c.cyan(result.file) + " -> " + c.green(result.outFile))
-                        else if result.status == 'skip'
-                            // update hashes on skip to prevent re-runs
-                            ctx.prevHashes[file] = ctx.newHashes[file] = { sig: result.signature, outFile: result.outFile }
-                            logDebug("[REBUILD_ONE] Skipped (up to date)", file)
-                    catch e
-                        logDebug("[REBUILD_ONE] Error compiling", file, e)
-                        console.error("Civetman error compiling", file, e)
-                    finally
-                        inFlight.delete(file)
-                        saveStateAndSync()
-                )
-
-                inFlight.set(file, task)
-
             logDebug("[WATCHER] Setting up watcher in directory:", path.resolve(cwd))
             watcher := createWatcher(cwd)
             logDebug("[WATCHER] Watcher instance created:", !!watcher)
@@ -616,7 +583,7 @@ registerDevCommand := =>
                 ctx, 
                 cwd, 
                 saveStateAndSync, 
-                rebuildOne)
+                engine)
             
             // Register this watcher for global cleanup once
             activeWatchBundles.add({ watcher, ctx })
