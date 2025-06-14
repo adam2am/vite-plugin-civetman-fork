@@ -19,9 +19,12 @@ ora from "ora"
 { compile } from "@danielx/civet"
 { parseTree as jsoncParseTree, findNodeAtLocation as jsoncFindNodeAtLocation, getNodeValue as jsoncGetNodeValue, modify as jsoncModify, applyEdits as jsoncApplyEdits } from "jsonc-parser"
 { createRequire } from "node:module"
+import type { ParseError } from "jsonc-parser"
 // @ts-ignore
 import { BuildEngine } from "./engine.civet"
 import { loadHashesFromJSONL, appendHashToJSONL } from "./jsonl-helpers.civet"
+// @ts-ignore – Micromatch ships its own types in modern versions; fallback suppress
+import micromatch from "micromatch"
 
 // ------------------------------------------------------------------
 // Global build fingerprint – any change forces full rebuilds
@@ -45,9 +48,9 @@ type Options =
     mapFiles: boolean,
     outTs?: string[],      // folders
     outTsx?: string[],
+    ignoreFolders?: string[], // folders to completely ignore
     concurrency?: number,
-    forcePolling?: boolean,
-    plugin?: string[]
+    forcePolling?: boolean
 
 type CompileSuccess = {
     status: "built" | "skip",
@@ -68,9 +71,9 @@ defaultOpts: Options :=
     vscodeHide: true,
     inlineMap: "full",
     mapFiles: false,
+    ignoreFolders: [],
     concurrency: Math.min(2, (os.cpus()?.length || 2)),
-    forcePolling: false,
-    plugin: []
+    forcePolling: false
 
 // ──────────────────────────────────────────────────────────────
 // Build-state layer – Pure functions operating on BuildContext  
@@ -250,48 +253,47 @@ export writeOutputAndGetResult := async (
 // ---------------- compilation (pure, worker-thread ready) ----------------
 // This function is now only used for IN-PROCESS compilation.
 // The worker bypasses this and calls the Civet compiler directly.
-export compileSource := async (ctx: BuildContext, file: string): Promise<CompileResult> => {
+export compileSource := async (ctx: BuildContext, file: string): Promise<CompileResult> => 
     // decide output type & expected filename
-    const isTsx = resolveOutputType(ctx, file)
-    const expectedOut = fileToOutFile(file, isTsx)
+    isTsx := resolveOutputType(ctx, file)
+    expectedOut := fileToOutFile(file, isTsx)
     logDebug("[COMPILE] Starting compilation", { file, expectedOut, isTsx })
 
     // compute deterministic signature for incremental builds ------------
-    const content = await fs.readFile(file, "utf8")
-    const signature = makeSignature(content, { tsx: isTsx, inlineMap: ctx.opts.inlineMap, mapFiles: ctx.opts.mapFiles })
+    content := await fs.readFile(file, "utf8")
+    signature := makeSignature(content, { tsx: isTsx, inlineMap: ctx.opts.inlineMap, mapFiles: ctx.opts.mapFiles })
 
-    const prev = ctx.prevHashes[file]
+    prev := ctx.prevHashes[file]
     logDebug("[COMPILE] Sig check", { file, signature, prevSig: prev?.sig })
 
-    try {
-        if (prev && prev.sig == signature && prev.outFile == expectedOut && await fs.exists(expectedOut)) {
+    try 
+        if (prev && prev.sig == signature && prev.outFile == expectedOut && await fs.exists(expectedOut)) 
             // outputs are guaranteed to be correct – quick skip
             ctx.outFiles.add(expectedOut)
-            if (ctx.opts.mapFiles && await fs.exists(expectedOut + ".map")) {
+            if (ctx.opts.mapFiles && await fs.exists(expectedOut + ".map")) 
                 ctx.outFiles.add(expectedOut + ".map")
-            }
             logDebug("[COMPILE] Skipping (signature match)", file)
             return { status: "skip", file, outFile: expectedOut, signature: signature }
-        }
-    } catch (_) {
+    catch _
         logDebug("[COMPILE] Error during sig check", file)
         // fall through to compile on any error
-    }
     
     // actual compile
-    try {
+    try 
         logDebug("[COMPILE] Starting actual in-process compilation", file)
-        const { code, sourceMap } = await compile(content, { filename: file, sourceMap: true }) as { code: string, sourceMap: any }
+        needMap := ctx.opts.inlineMap != "none" || ctx.opts.mapFiles
+        compileRes := await compile(content, { filename: file, sourceMap: needMap }) as unknown as { code: string, sourceMap?: any }
         logDebug("[COMPILE] In-process compilation successful", file)
 
-        const mapJson = sourceMap.json(file, expectedOut)
-        return await writeOutputAndGetResult(ctx, file, isTsx, code, mapJson, signature)
-
-    } catch (e) {
+        mapJson := if needMap && compileRes.sourceMap?
+            compileRes.sourceMap.json(file, expectedOut)
+        else
+            null
+        return await writeOutputAndGetResult(ctx, file, isTsx, compileRes.code, mapJson, signature)
+    catch e
         // propagate error – UI layer decides what to log/exit
         throw e
-    }
-}
+
 
 // ---------------- side-effect helpers (IDE, gitignore) ----------------
 syncIDEConfigs := async (ctx: BuildContext) =>
@@ -313,7 +315,7 @@ addVscodeExcludes := async (ctx: BuildContext) =>
     await fs.ensureFile(settingsFile)
 
     content := await fs.readFile(settingsFile, "utf8")
-    errors := [] as any[]
+    errors: ParseError[] := []
     tree := jsoncParseTree(content, errors, { allowTrailingComma: true })
     if !tree
         // cannot parse settings, bail early
@@ -413,7 +415,11 @@ runBuild := async (cwd: string, opts: Options) =>
     await cleanupTmpFiles(cwd)
 
     // Step 1: collect source files
-    sources := await glob("**/*.civet", ignore: ["node_modules/**/*", "dist/**/*"], cwd: cwd)
+    baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
+    userIgnores := (opts.ignoreFolders ?? []).map((d) => path.join(d, "**"))
+    ignorePatterns := [...baseIgnores, ...userIgnores]
+
+    sources := await glob("**/*.civet", ignore: ignorePatterns, cwd: cwd, caseSensitiveMatch: false)
 
     // Step 2: load previous state and create context
     { prevGenerated, prevHashes } := await loadPrevState(cwd)
@@ -490,19 +496,7 @@ registerBuildCommand := =>
             cwd := process.cwd()
             opts := { ...defaultOpts, ...program.opts<Options>() }
             try
-                { ctx, engine } := await runBuild(cwd, opts)
-
-                for pluginPath of (opts.plugin ?? [])
-                    try
-                        resolved := path.isAbsolute(pluginPath) ? pluginPath : join(cwd, pluginPath)
-                        mod := await import(resolved)
-                        if typeof mod.default == "function"
-                            mod.default(engine.events)
-                        else if typeof mod == "function"
-                            mod(engine.events)
-                    catch e
-                        console.error("Failed to load plugin", pluginPath, e)
-
+                await runBuild(cwd, opts)
                 console.log c.green("\nCivetman finished building!")
             catch e
                 // runBuild will have already logged details
@@ -513,8 +507,18 @@ registerBuildCommand := =>
 createWatcher := (cwd: string, opts: Options) ->
     // Polling by default only in CI; can be overridden via --force-polling.
     usePolling := opts.forcePolling || !!process.env.CI
+    // Build ignore patterns (same logic as build step)
+    baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
+    userIgnores := (opts.ignoreFolders || []).map((d: string) => path.join(d, "**"))
+    ignorePatterns := [...baseIgnores, ...userIgnores]
+
+    // Case-insensitive matcher using micromatch
+    ignoreFn := (abs: string) =>
+        rel := path.relative(cwd, abs)
+        micromatch.isMatch(rel, ignorePatterns, nocase: true)
+
     chokidar.watch(cwd, {
-        ignored: [/node_modules/, /dist/, /(^|[\/]\\)\..*|.*\.civetmantmp$/], // ignore dotfiles and our temp files
+        ignored: ignoreFn,
         persistent: true,
         ignoreInitial: true,
         usePolling: usePolling,
@@ -527,11 +531,18 @@ createWatcher := (cwd: string, opts: Options) ->
     })
 
 // ---------------- global watcher registry to avoid duplicate SIGINT logs ----------------
-activeWatchBundles := (global as any).__civetman_watch_bundles ?? new Set<any>()
-(global as any).__civetman_watch_bundles = activeWatchBundles
 
-if !(global as any).__civetman_sigint_handler_registered
-    (global as any).__civetman_sigint_handler_registered = true
+// Define a type for our custom global properties to avoid `as any`.
+interface CivetmanGlobal extends NodeJS.Global {
+    __civetman_watch_bundles?: Set<any>
+    __civetman_sigint_handler_registered?: boolean
+}
+
+activeWatchBundles := (global as CivetmanGlobal).__civetman_watch_bundles ?? new Set<any>()
+(global as CivetmanGlobal).__civetman_watch_bundles = activeWatchBundles
+
+if !(global as CivetmanGlobal).__civetman_sigint_handler_registered
+    (global as CivetmanGlobal).__civetman_sigint_handler_registered = true
     process.on "SIGINT", async =>
         // Gracefully close all active watchers and persist state exactly once
         for entry of activeWatchBundles
@@ -555,6 +566,9 @@ attachWatchHandlers := (watcher: any,
 
     // This callback defines how a single file event is handled in watch mode.
     rebuildOne := (file: string) =>
+        // Ensure we read the latest file contents; drop any cached entry
+        if engine.contentCache? and engine.contentCache.delete?
+            engine.contentCache.delete(file)
         engine.build(file, (result: CompileResult) => {
             if result.status == 'built'
                 ctx.prevHashes[file] = ctx.newHashes[file] = { sig: result.signature!, outFile: result.outFile! }
@@ -616,18 +630,6 @@ registerDevCommand := =>
         try
             console.log c.blue("Civetman starts building in watch mode…\n")
             { ctx, engine } := await runBuild(cwd, opts)
-
-            for pluginPath of (opts.plugin ?? [])
-                try
-                    resolved := path.isAbsolute(pluginPath) ? pluginPath : join(cwd, pluginPath)
-                    mod := await import(resolved)
-                    if typeof mod.default == "function"
-                        mod.default(engine.events)
-                    else if typeof mod == "function"
-                        mod(engine.events)
-                catch e
-                    console.error("Failed to load plugin", pluginPath, e)
-
             console.log c.green("Initial build complete! Watching for changes…\n")
             
             saveStateAndSync := debounce(async =>
@@ -673,7 +675,7 @@ export default () =>
         .option("--map-files", "Emit external .map files")
         .option("--concurrency <number>", "Max parallel compilations", (val) => parseInt(val, 10))
         .option("--force-polling", "Force chokidar polling even outside CI")
-        .option("--plugin <path>", "Load plugin file (repeatable or comma-separated)", collectDirs, [] as string[])
+        .option("--ignore-folders <dir>", "Folder(s) to ignore (repeatable or comma-separated)", collectDirs, [] as string[])
 
     registerBuildCommand()
     registerDevCommand()
@@ -684,17 +686,26 @@ export default () =>
 // End of experimental refactor skeleton
 // --------------------------------------------------------------
 
-// Lightweight debounce util for watch-mode side-effects
+// Debounce helper – immediate execution on first call (leading) and one batched tail call.
 debounce := (func: Function, timeout = 1000) ->
     timer: NodeJS.Timeout | null .= null
+    pendingArgs: any[] | null .= null
     (...args: any[]) ->
-        logDebug("[DEBOUNCE] Debouncing call with args", args)
-        if timer?
-            logDebug("[DEBOUNCE] Clearing previous timer")
-            clearTimeout(timer)
-        timer = setTimeout (->
-            logDebug("[DEBOUNCE] Executing debounced function")
+        logDebug("[DEBOUNCE] Debounce invoked", args)
+        if !timer?
+            // Leading edge – fire immediately
+            logDebug("[DEBOUNCE] Leading call executed")
             func(...args)
-        ), timeout
+            // Start timer for potential trailing call
+            timer = setTimeout (->
+                if pendingArgs?
+                    logDebug("[DEBOUNCE] Trailing batched call executed")
+                    func(...pendingArgs)
+                timer = null
+                pendingArgs = null
+            ), timeout
+        else
+            // While timer active, update the pending args for a single trailing call
+            pendingArgs = args
 
 export computeHash, resolveOutputType, defaultOpts

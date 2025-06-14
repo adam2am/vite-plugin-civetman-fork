@@ -65,6 +65,10 @@ interface CivetmanOptions {
   outTs?: string | string[];
   outTsx?: string | string[];
   concurrency?: number; // max parallel compilations
+  /** Force chokidar to use polling instead of native file system events */
+  forcePolling?: boolean;
+  /** Folder(s) to completely ignore */
+  ignoreFolders?: string | string[];
 }
 
 /**
@@ -82,6 +86,8 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
     outTs: [],
     outTsx: [],
     concurrency: undefined as number | undefined,
+    forcePolling: false,
+    ignoreFolders: [],
     ...options
   };
   // Default output dirs if none specified
@@ -112,10 +118,16 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
       return dirs.flatMap(dir => ['--out-tsx', dir]);
     },
     concurrency: (n: number) => Number.isFinite(n) ? ['--concurrency', String(n)] : [],
+    forcePolling: (v: boolean) => v ? ['--force-polling'] : [],
+    ignoreFolders: (value: string | string[]) => {
+      if (!value || (Array.isArray(value) && value.length === 0)) return [];
+      const dirs = Array.isArray(value) ? value : [value];
+      return dirs.flatMap(dir => ['--ignore-folders', dir]);
+    },
   } as any;
   // Specify order of flags
   const flagOrder: (keyof typeof flagGenerators)[] = [
-    'tsx', 'gitIgnore', 'vscodeHide', 'inlineMap', 'mapFiles', 'outTs', 'outTsx', 'concurrency'
+    'tsx', 'gitIgnore', 'vscodeHide', 'inlineMap', 'mapFiles', 'outTs', 'outTsx', 'ignoreFolders', 'concurrency', 'forcePolling'
   ];
 
   function getFlags(): string[] {

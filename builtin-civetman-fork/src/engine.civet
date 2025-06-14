@@ -5,7 +5,6 @@
 
 import fs from "fs-extra"
 import { WorkerPool } from "./workerPool.civet"
-import { EventEmitter } from "node:events"
 
 // Import helpers and types from the main module.
 import { 
@@ -22,15 +21,16 @@ import { compile } from "@danielx/civet"
 export class BuildEngine
     ctx: BuildContext
     pool: WorkerPool
+    // Simple in-memory cache to avoid repeated disk reads during watch mode
+    contentCache: Map<string, string>
     inFlight: Map<string, Promise<any>>
-    events: EventEmitter
 
     constructor(ctx: BuildContext)
         @ctx = ctx
         concurrency := Math.max(1, (@ctx.opts.concurrency ?? 1))
         @pool = new WorkerPool(concurrency)
         @inFlight = new Map<string, Promise<any>>()
-        @events = new EventEmitter()
+        @contentCache = new Map<string, string>()
 
     // Build / rebuild *all* sources currently in ctx.sources
     async buildAll(onProgress?: (result: CompileResult) => void)
@@ -44,15 +44,10 @@ export class BuildEngine
 
         task := @runCompileTask(file).then (result: CompileResult) =>
             onProgress?.(result)
-            if result.status == 'built'
-                @events.emit('compiled', result)
-            else if result.status == 'skip'
-                @events.emit('skipped', result)
             return result
         .catch (error: any) =>
             result := { file, status: 'error', error: error } as CompileResult
             onProgress?.(result)
-            @events.emit('error', result)
             return result
 
         // Track promise for deduplication.
@@ -63,7 +58,13 @@ export class BuildEngine
 
     async runCompileTask(file: string): Promise<CompileResult>
         isTsx := resolveOutputType(@ctx, file)
-        content := await fs.readFile(file, "utf8")
+        // Reuse cached file content when available to avoid IO on rapid rebuilds
+        content := if @contentCache.has(file)
+            @contentCache.get(file)!
+        else
+            readData := await fs.readFile(file, "utf8")
+            @contentCache.set(file, readData)
+            readData
         signature := makeSignature(content, { tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles })
 
         // Skip check
@@ -79,6 +80,9 @@ export class BuildEngine
         code .= ""
         mapJson .= null
 
+        // Only generate source maps when the user actually wants them
+        wantMap := (@ctx.opts.inlineMap != "none") or @ctx.opts.mapFiles
+
         // Use worker pool if available and concurrency allows, otherwise compile in-process.
         if (@ctx.opts.concurrency ?? 1) > 1 and @pool.poolAvailable
             logDebug("[COMPILE] Compiling with worker", file)
@@ -87,9 +91,10 @@ export class BuildEngine
             mapJson = workerResult.mapJson
         else
             logDebug("[COMPILE] Compiling in-process", file)
-            compileResult := await compile(content, { filename: file, sourceMap: true })
+            compileResult := await compile(content, { filename: file, sourceMap: wantMap }) as unknown as { code: string, sourceMap?: any }
             code = compileResult.code
-            mapJson = compileResult.sourceMap.json(file, expectedOut)
+            if wantMap and compileResult.sourceMap?
+                mapJson = compileResult.sourceMap.json(file, expectedOut)
 
         return await writeOutputAndGetResult(@ctx, file, isTsx, code, mapJson, signature)
 
@@ -98,13 +103,12 @@ export class BuildEngine
         @ctx.sources = @ctx.sources.filter (f) => f !== file
         delete @ctx.prevHashes[file]
         delete @ctx.newHashes[file]
+        @contentCache.delete(file)
 
         tsFile := file.replace(".civet", ".ts")
         tsxFile := file.replace(".civet", ".tsx")
         for out of [tsFile, tsxFile]
             await @removeOutputFile(out)
-        
-        @events.emit('deleted', { file })
     
     async removeOutputFile(file: string)
         try

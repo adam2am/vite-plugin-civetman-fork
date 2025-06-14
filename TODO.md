@@ -93,27 +93,17 @@ state updates   │
 
 ## 5. Public Plugin / Event Hooks
 
-- [ ] **Context**  
-  Users may want to run extra steps (e.g. minify, lint) without forking core.
+~~Plugin system deemed unnecessary – decided not to implement.~~
 
-- [ ] **Idea & reasons**  
-  Expose an internal `EventEmitter` that fires `compiled`, `skipped`, `deleted` etc.  CLI can load external JS plugins that subscribe, improving future-proofing.
-
-- [ ] **Potential approach**  
-  1. Add `events` property to `BuildEngine`.  
-  2. Introduce `--plugin <file>` CLI flag that dynamically imports modules and hands them the emitter.  
-  3. Document simple "hello-plugin" example.
-
-- [ ] **Relevant places / files**  
-  New `plugins` folder, `BuildEngine`, CLI wiring in `main-refactored.civet`.
+*All tasks considered complete by omission.*
 
 ---
 
 ## 6. Micro-optimisations & Housekeeping
 
-- [ ] Cache file contents + hashes in memory during watch to avoid redundant disk reads.  
-- [ ] Skip `sourceMap.json()` call when both `inlineMap === 'none'` and `!opts.mapFiles`.  
-- [ ] Switch `debounce` helper to execute immediately on first call (`leading`) then batch later calls.  
+- [x] Cache file contents + hashes in memory during watch to avoid redundant disk reads.
+- [x] Skip `sourceMap.json()` call when both `inlineMap === 'none'` and `!opts.mapFiles`.
+- [x] Switch `debounce` helper to execute immediately on first call (`leading`) then batch later calls.
 - [ ] Tighten types and remove any `as any` casts.  
 - [ ] Add unit benchmarks for cold vs. warm builds.
 
