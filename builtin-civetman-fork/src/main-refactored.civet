@@ -67,10 +67,23 @@ computeHash := (input: string): string =>
     crypto.createHash("sha1").update(input).digest("hex")
 
 // ---------------- debug ----------------
-outputDebug := true  // enable by env var
+// Debug logging – enable by setting CIVETMAN_DEBUG env var.
+//   CIVETMAN_DEBUG="*"     → log every category
+//   CIVETMAN_DEBUG="WATCHER,COMPILE" → log only those containing this substring (case-insensitive)
+
+debugEnv := process.env.CIVETMAN_DEBUG
+outputDebug := !!debugEnv
+debugFilters := if debugEnv? and debugEnv != "*" and debugEnv.toLowerCase() != "all"
+    new Set(debugEnv.split(",").map((s: string) => s.trim().toUpperCase()).filter((s) => !!s))
+else
+    null
+
 logDebug := (...args: any[]) =>
-    if outputDebug
-        console.log("[civetman-debug]", ...args)
+    if !outputDebug return
+    tag := typeof args[0] == "string" ? args[0].toUpperCase() : ""
+    if debugFilters? and ![...debugFilters].some((f) => tag.includes(f))
+        return
+    console.log("[civetman-debug]", ...args)
 
 // ------------------------------------------------------------------
 // Atomic write utility ensures we never leave partially-written files
@@ -453,17 +466,21 @@ attachWatchHandlers := (watcher: any,
         logDebug("[WATCHER] Error in watcher:", err)
 
     watcher.on "add", (abs: string) ->
+        // Only react to source .civet files – ignore generated outputs
+        unless abs.endsWith('.civet') return
         file := path.relative(cwd, abs)
         logDebug("[WATCHER_ADD] File added", file)
-        if !ctx.sources.includes(file)
+        unless ctx.sources.includes(file)
             ctx.sources.push file
             logDebug("[WATCHER_ADD] Added to sources list", file)
         rebuildOne(file)
     watcher.on "change", (abs: string) ->
+        unless abs.endsWith('.civet') return
         file := path.relative(cwd, abs)
         logDebug("[WATCHER_CHANGE] File changed", file)
         rebuildOne(file)
     watcher.on "unlink", async (abs: string) =>
+        unless abs.endsWith('.civet') return
         file := path.relative(cwd, abs)
         logDebug("[WATCHER_UNLINK] File removed", file)
         ctx.sources = ctx.sources.filter((f: string) => f != file)
@@ -506,18 +523,33 @@ registerDevCommand := =>
                 logDebug("[STATE_SYNC] State sync complete")
             , 800)
 
-            // Define rebuildOne before creating watcher so it is in scope
-            rebuildOne := async (file: string) =>
-                logDebug("[REBUILD_ONE] Starting rebuild for", file)
-                try
-                    result := await compileSource(ctx, file)
-                    if result.status == 'built'
-                        logDebug("[REBUILD_ONE] Successfully built", file, "->", result.outFile)
-                        console.log c.green('  ✓ ' + c.cyan(result.file) + " -> " + c.green(result.outFile))
-                    saveStateAndSync()
-                catch e
-                    logDebug("[REBUILD_ONE] Error compiling", file, e)
-                    console.error("Civetman error compiling", file, e)
+            // Shared limiter & de-duplication for watch-mode rebuilds
+            limitFn := pLimit(Math.max(1, opts.concurrency ?? defaultOpts.concurrency ?? 2))
+            inFlight := new Map<string, Promise<any>>()
+
+            rebuildOne := (file: string) ->
+                if inFlight.has(file)
+                    logDebug("[REBUILD_ONE] Already building", file)
+                    return
+
+                task := limitFn(async () =>
+                    logDebug("[REBUILD_ONE] Starting compile for", file)
+                    try
+                        result := await compileSource(ctx, file)
+                        if result.status == 'built'
+                            logDebug("[REBUILD_ONE] Built", file, "->", result.outFile)
+                            console.log c.green('  ✓ ' + c.cyan(result.file) + " -> " + c.green(result.outFile))
+                        else
+                            logDebug("[REBUILD_ONE] Skipped (up to date)", file)
+                    catch e
+                        logDebug("[REBUILD_ONE] Error compiling", file, e)
+                        console.error("Civetman error compiling", file, e)
+                    finally
+                        inFlight.delete(file)
+                        saveStateAndSync()
+                )
+
+                inFlight.set(file, task)
 
             logDebug("[WATCHER] Setting up watcher in directory:", path.resolve(cwd))
             watcher := createWatcher(cwd)
