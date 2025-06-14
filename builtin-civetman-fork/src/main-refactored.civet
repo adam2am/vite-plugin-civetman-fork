@@ -19,6 +19,17 @@ chokidar from "chokidar"
 ora from "ora"
 { compile } from "@danielx/civet"
 { parseTree as jsoncParseTree, findNodeAtLocation as jsoncFindNodeAtLocation, getNodeValue as jsoncGetNodeValue, modify as jsoncModify, applyEdits as jsoncApplyEdits } from "jsonc-parser"
+{ createRequire } from "node:module"
+
+// ------------------------------------------------------------------
+// Global build fingerprint – any change forces full rebuilds
+// ------------------------------------------------------------------
+require := createRequire(import.meta.url)
+buildFingerprint := JSON.stringify({
+    civetmanVersion: "0.1.0", // bump on release
+    civetCompilerVersion: require("@danielx/civet/package.json").version,
+    nodeMajor: process.version.split(".")[0]
+})
 
 // ──────────────────────────────────────────────────────────────
 // Types & defaults                                                
@@ -57,9 +68,9 @@ type BuildContext =
     // previous manifest data (for pruning)
     prevGenerated: Set<string>,
     // previous content hashes for incremental builds
-    prevHashes: Record<string, { hash: string, outFile: string }>,
+    prevHashes: Record<string, { sig: string, outFile: string }>,
     // new hashes produced this run
-    newHashes: Record<string, { hash: string, outFile: string }>
+    newHashes: Record<string, { sig: string, outFile: string }>
 
 // ---------------- helper utils (pure) ----------------
 
@@ -155,7 +166,11 @@ saveJSON := async (file: string, data: any) =>
 loadPrevState := async (cwd: string) =>
     manifestObj := await loadJSON(manifestFile(cwd), { generated: [] })
     prevGenerated := new Set(manifestObj.generated as string[])
-    prevHashes := await loadJSON(hashManifestFile(cwd), {}) as Record<string, { hash: string, outFile: string }>
+    rawHashes := await loadJSON(hashManifestFile(cwd), {})
+    // Normalize legacy "hash" field → "sig" for seamless upgrade
+    prevHashes := Object.fromEntries(
+      Object.entries(rawHashes).map(([k, v]: [string, any]) => [k, { sig: v.sig ?? v.hash ?? "", outFile: v.outFile }])
+    ) as Record<string, { sig: string, outFile: string }>
     { prevGenerated, prevHashes }
 
 saveNewState := async (ctx: BuildContext) =>
@@ -172,25 +187,28 @@ compileSource := async (ctx: BuildContext, file: string) => {
     expectedOut := fileToOutFile(file, isTsx)
     logDebug("[COMPILE] Starting compilation", { file, expectedOut, isTsx })
 
-    // incremental skip logic
+    // compute deterministic signature for incremental builds ------------
     content := await fs.readFile(file, "utf8")
-    newHash := computeHash(content)
+    signature := computeHash(
+        content +
+        JSON.stringify({ tsx: isTsx, inlineMap: ctx.opts.inlineMap, mapFiles: ctx.opts.mapFiles }) +
+        buildFingerprint
+    )
+
     prev := ctx.prevHashes[file]
-    logDebug("[COMPILE] Hash check", { file, newHash, prevHash: prev?.hash })
+    logDebug("[COMPILE] Sig check", { file, signature, prevSig: prev?.sig })
 
     try
-        if prev && prev.hash == newHash && prev.outFile == expectedOut && await fs.exists(expectedOut)
-            sourceMtime := (await fs.stat(file)).mtimeMs
-            outMtime := (await fs.stat(expectedOut)).mtimeMs
-            logDebug("[COMPILE] Checking mtimes", { file, sourceMtime, outMtime })
-            if outMtime > sourceMtime
-                logDebug("[COMPILE] Skipping (up to date)", file)
-                ctx.outFiles.add(expectedOut)
-                ctx.newHashes[file] = { hash: newHash, outFile: expectedOut }
-                return { status: "skip", file, outFile: expectedOut }
+        if prev and prev.sig == signature and prev.outFile == expectedOut and await fs.exists(expectedOut)
+            // outputs are guaranteed to be correct – quick skip
+            ctx.outFiles.add(expectedOut)
+            if ctx.opts.mapFiles and await fs.exists(expectedOut + ".map")
+                ctx.outFiles.add(expectedOut + ".map")
+            logDebug("[COMPILE] Skipping (signature match)", file)
+            return { status: "skip", file, outFile: expectedOut, signature: signature }
     catch _
-        logDebug("[COMPILE] Error during mtime check", file)
-        // if stat fails, just fall through to build
+        logDebug("[COMPILE] Error during sig check", file)
+        // fall through to compile on any error
     
     // actual compile
     try
@@ -208,16 +226,17 @@ compileSource := async (ctx: BuildContext, file: string) => {
             codeOut += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
 
         if ctx.opts.mapFiles
-            await safeWrite(mapFile, JSON.stringify(sourceMap.json(file, expectedOut)))
+            mapJson := sourceMap.json(file, expectedOut)
+            await safeWrite(mapFile, JSON.stringify(mapJson))
+            ctx.outFiles.add(mapFile)
 
             if ctx.opts.inlineMap == "fileurl"
                 codeOut += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"
 
         await safeWrite(expectedOut, codeOut)
         ctx.outFiles.add expectedOut
-        ctx.newHashes[file] = { hash: newHash, outFile: expectedOut }
         logDebug("built", file)
-        return { status: "built", file, outFile: expectedOut }
+        return { status: "built", file, outFile: expectedOut, signature: signature }
     catch e
         // propagate error – UI layer decides what to log/exit
         throw e
@@ -248,9 +267,7 @@ syncIDEConfigs := async (ctx: BuildContext) =>
 
 addVscodeExcludes := async (ctx: BuildContext) =>
     // Build the list of patterns we should hide inside VS Code
-    files .= [...ctx.outFiles]
-    if ctx.opts.mapFiles
-        files = [...files, ...files.map((f: string) => f + ".map")]
+    files := [...ctx.outFiles]
     
     placeholder := "below is generated by civetman"
     configKey := "files.exclude"
@@ -296,41 +313,54 @@ addGitignoreEntries := async (ctx: BuildContext) =>
     gitignorePath := join(ctx.cwd, ".gitignore")
     startMarker := "# civetman:start - Managed by civetman. DO NOT EDIT THIS BLOCK."
     endMarker := "# civetman:end - End of civetman managed block."
+    civetmanDirEntry := ".civetman/"
 
     await fs.ensureFile(gitignorePath)
-    original .= await fs.readFile(gitignorePath, "utf8")
+    original := await fs.readFile(gitignorePath, "utf8")
+    lines := original.split('\n')
 
-    generatedFiles .= [...ctx.outFiles]
-    if ctx.opts.mapFiles
-        generatedFiles = [...generatedFiles, ...generatedFiles.map((f: string) => f + ".map")]
+    // Filter out our managed entries, preserving all other lines.
+    // This is self-healing if the file was corrupted.
+    nonManagedLines := [] as string[]
+    inManagedBlock .= false
+    for line of lines
+        trimmed := line.trim()
+        if trimmed == startMarker
+            inManagedBlock = true
+            continue
+        if trimmed == endMarker
+            inManagedBlock = false
+            continue
+        if trimmed == civetmanDirEntry
+            continue
+        if !inManagedBlock
+            nonManagedLines.push(line)
 
-    startIdx := original.indexOf(startMarker)
-    endIdx := startIdx == -1 ? -1 : original.indexOf(endMarker, startIdx + startMarker.length)
-
-    [before, after] := if startIdx != -1 && endIdx != -1
-        [original.substring(0, startIdx), original.substring(endIdx + endMarker.length)]
-    else
-        [original, ""]
-
+    // Clean up trailing blank lines to prevent them from accumulating
+    while nonManagedLines.length > 0 && nonManagedLines[nonManagedLines.length - 1].trim() === ''
+        nonManagedLines.pop()
+    
+    // Create the new managed block, sorted for determinism
     managedBlock := if ctx.opts.gitIgnore
-        [startMarker, ...generatedFiles, endMarker].join("\n")
+        [startMarker, ...[...ctx.outFiles].sort(), endMarker].join('\n')
     else
         ""
 
-    combined := (before.trimEnd() + "\n\n" + managedBlock + "\n\n" + after.trimStart()).trimEnd() + "\n"
+    // Reconstruct the file content
+    newContent .= nonManagedLines.join('\n').trimEnd()
+    if newContent
+        newContent += '\n\n'
+    
+    // Add the managed block if it exists
+    if managedBlock
+        newContent += managedBlock + '\n\n'
 
-    if combined != original
-        await fs.writeFile(gitignorePath, combined, "utf8")
+    // Always ensure the .civetman directory is ignored
+    newContent += civetmanDirEntry + '\n'
+
+    if newContent.trim() != original.trim()
+        await safeWrite(gitignorePath, newContent)
     return
-
-// Ensure .civetman/ dir is ignored by git
-ensureGitignoreManifestEntry := async (cwd: string) =>
-    gitignoreFile := join(cwd, ".gitignore")
-    await fs.ensureFile(gitignoreFile)
-    entry := "/.civetman/"
-    content := await fs.readFile(gitignoreFile, "utf8")
-    if !content.split("\n").map((l) => l.trim()).includes(entry)
-        await fs.appendFile(gitignoreFile, "\n" + entry + "\n")
 
 // ---------------- helper to prune stale outputs ----------------
 pruneStaleOutputs := async (ctx: BuildContext) =>
@@ -339,8 +369,6 @@ pruneStaleOutputs := async (ctx: BuildContext) =>
         try
             if await fs.exists(join(ctx.cwd, file))
                 await fs.unlink(join(ctx.cwd, file))
-            if await fs.exists(join(ctx.cwd, file + ".map"))
-                await fs.unlink(join(ctx.cwd, file + ".map"))
         catch _
             // best effort – ignore deletion errors
             continue
@@ -350,7 +378,6 @@ pruneStaleOutputs := async (ctx: BuildContext) =>
 runBuild := async (cwd: string, opts: Options) =>
     // Step 0: scrub temp files from previous aborted runs
     await cleanupTmpFiles(cwd)
-    await ensureGitignoreManifestEntry(cwd)
 
     // Step 1: collect source files
     sources := await glob("**/*.civet", ignore: ["node_modules/**/*", "dist/**/*"], cwd: cwd)
@@ -375,8 +402,10 @@ runBuild := async (cwd: string, opts: Options) =>
     onProgress := (res: any) => {
         if res.status == 'built'
             spinner.succeed(c.cyan(res.file) + " -> " + c.green(res.outFile))
+            ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
             builtCount++
         else if res.status == 'skip'
+            ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
             skippedCount++
         else if res.status == 'error'
             hadError = true
@@ -435,7 +464,7 @@ registerBuildCommand := =>
 // ---------------- watch mode helpers ----------------
 createWatcher := (cwd: string) ->
     chokidar.watch(cwd, {
-        ignored: [/node_modules/, /dist/, /(^|[\/\\])\../], // ignore dotfiles
+        ignored: [/node_modules/, /dist/, /(^|[\/\\])\..*|.*\.civetmantmp$/], // ignore dotfiles and our temp files
         persistent: true,
         ignoreInitial: true,
         usePolling: true, // for max reliability in tests
@@ -446,6 +475,26 @@ createWatcher := (cwd: string) ->
             pollInterval: 100
         }
     })
+
+// ---------------- global watcher registry to avoid duplicate SIGINT logs ----------------
+activeWatchBundles := (global as any).__civetman_watch_bundles ?? new Set<any>()
+(global as any).__civetman_watch_bundles = activeWatchBundles
+
+if !(global as any).__civetman_sigint_handler_registered
+    (global as any).__civetman_sigint_handler_registered = true
+    process.on "SIGINT", async =>
+        // Gracefully close all active watchers and persist state exactly once
+        for entry of activeWatchBundles
+            try
+                await entry.watcher.close()
+                ctxObj := entry.ctx
+                ctxObj.prevHashes = { ...ctxObj.prevHashes, ...ctxObj.newHashes }
+                ctxObj.newHashes = {}
+                await saveNewState(ctxObj)
+            catch _
+                continue
+        console.log("\nCivetman watch stopped.")
+        process.exit()
 
 // Helper to add all watch-event listeners to a chokidar watcher instance
 attachWatchHandlers := (watcher: any, 
@@ -503,6 +552,7 @@ attachWatchHandlers := (watcher: any,
                 logDebug("[WATCHER_UNLINK] Error removing file", out, e)
             }
             ctx.outFiles.delete(out)
+            ctx.outFiles.delete(out + ".map")
         saveStateAndSync()
 
 // ---------------- watch mode ----------------
@@ -539,10 +589,14 @@ registerDevCommand := =>
                     logDebug("[REBUILD_ONE] Starting compile for", file)
                     try
                         result := await compileSource(ctx, file)
+                        // Immediate state update to prevent re-runs from rapid-fire events
                         if result.status == 'built'
+                            ctx.prevHashes[file] = ctx.newHashes[file] = { sig: result.signature, outFile: result.outFile }
                             logDebug("[REBUILD_ONE] Built", file, "->", result.outFile)
                             console.log c.green('  ✓ ' + c.cyan(result.file) + " -> " + c.green(result.outFile))
-                        else
+                        else if result.status == 'skip'
+                            // update hashes on skip to prevent re-runs
+                            ctx.prevHashes[file] = ctx.newHashes[file] = { sig: result.signature, outFile: result.outFile }
                             logDebug("[REBUILD_ONE] Skipped (up to date)", file)
                     catch e
                         logDebug("[REBUILD_ONE] Error compiling", file, e)
@@ -564,14 +618,8 @@ registerDevCommand := =>
                 saveStateAndSync, 
                 rebuildOne)
             
-            process.on "SIGINT", async =>
-                watcher.close()
-                // Persist final state before exiting
-                ctx.prevHashes = { ...ctx.prevHashes, ...ctx.newHashes }
-                ctx.newHashes = {}
-                await saveNewState(ctx)
-                console.log("\nCivetman watch stopped.")
-                process.exit()
+            // Register this watcher for global cleanup once
+            activeWatchBundles.add({ watcher, ctx })
         catch e
             console.error c.red("Watch mode failed"), e
             process.exitCode = 1
