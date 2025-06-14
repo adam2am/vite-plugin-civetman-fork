@@ -3,21 +3,21 @@
 // decides skip-vs-compile, delegates to pool, then calls writeOutputAndGetResult
 // --------------------------------------------------------------
 
-import fs from "fs-extra"
-import { WorkerPool } from "./workerPool.civet"
+fs from "fs-extra"
+{ WorkerPool } from "./workerPool.civet"
 
 // Import helpers and types from the main module.
-import { 
-    writeOutputAndGetResult,
+{   writeOutputAndGetResult,
     resolveOutputType,
     makeSignature,
     fileToOutFile,
     logDebug,
     type BuildContext, 
     type CompileResult 
-} from "./main-refactored.civet"
-import { compile } from "@danielx/civet"
-import { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
+} from "./main.civet"
+
+{ compile } from "@danielx/civet"
+{ findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 export class BuildEngine
     ctx: BuildContext
@@ -28,7 +28,7 @@ export class BuildEngine
 
     constructor(ctx: BuildContext)
         @ctx = ctx
-        concurrency := Math.max(1, (@ctx.opts.concurrency ?? 1))
+        concurrency := Math.max(1, (@ctx.opts.concurrency ?? 2))
         @pool = new WorkerPool(concurrency)
         @inFlight = new Map<string, Promise<any>>()
         @contentCache = new Map<string, string>()
@@ -76,9 +76,9 @@ export class BuildEngine
         // Skip check
         prev := @ctx.prevHashes[file]
         expectedOut := fileToOutFile(file, isTsx)
-        if prev and prev.sig == signature and prev.outFile == expectedOut and await fs.exists(expectedOut)
+        if prev and prev.sig == signature and prev.outFile == expectedOut and await fs.pathExists(expectedOut)
             @ctx.outFiles.add(expectedOut)
-            if @ctx.opts.mapFiles and await fs.exists(expectedOut + ".map")
+            if @ctx.opts.mapFiles and await fs.pathExists(expectedOut + ".map")
                 @ctx.outFiles.add(expectedOut + ".map")
             logDebug("[COMPILE] Skipping (signature match)", file)
             return { status: "skip", file, outFile: expectedOut, signature: signature }
@@ -90,7 +90,7 @@ export class BuildEngine
         wantMap := (@ctx.opts.inlineMap != "none") or @ctx.opts.mapFiles
 
         // Use worker pool if available and concurrency allows, otherwise compile in-process.
-        if (@ctx.opts.concurrency ?? 1) > 1 and @pool.poolAvailable
+        if (@ctx.opts.concurrency ?? 2) > 1 and @pool.poolAvailable
             try
                 logDebug("[COMPILE] Compiling with worker", file)
                 workerResult := await @pool.exec({ file, content, isTsx, wantMap, parseOpts })
@@ -138,9 +138,9 @@ export class BuildEngine
     
     async removeOutputFile(file: string)
         try
-            if await fs.exists(file)
+            if await fs.pathExists(file)
                 await fs.unlink(file)
-            if await fs.exists(file + ".map")
+            if await fs.pathExists(file + ".map")
                 await fs.unlink(file + ".map")
         catch _
             // best-effort

@@ -22,7 +22,7 @@ parentPort!.on "message", async (msg) =>
         // The outFile path is needed to correctly generate the source map.
         outFile := file.replace('.civet', isTsx ? '.tsx' : '.ts')
         mapJson := if wantMap then sourceMap.json(file, outFile) else null
-        plainMap := JSON.parse(JSON.stringify(mapJson))
+        plainMap := mapJson
 
         // Send the successful result back to the main thread.
         parentPort!.postMessage({ ok: true, code, mapJson: plainMap })

@@ -1,10 +1,8 @@
 // --------------------------------------------------------------------
 // jsonl-helpers.civet – Helpers for reading/writing JSON-Lines files
 // --------------------------------------------------------------------
-import fs from "fs-extra"
-import path from "node:path"
-import { safeWrite } from "./main-refactored.civet"
-
+fs from "fs-extra"
+{ safeWrite } from "./main.civet"
 
 // A record in our hashes.jsonl file
 export type HashEntry = 
@@ -18,7 +16,7 @@ export type HashEntry =
 export loadHashesFromJSONL := 
     async (filePath: string): Promise<Record<string, { sig: string, outFile: string }>> => 
         try
-            unless await fs.exists(filePath) return {}
+            unless await fs.pathExists(filePath) return {}
             content := await fs.readFile(filePath, "utf8")
             lines := content.split('\n')
             

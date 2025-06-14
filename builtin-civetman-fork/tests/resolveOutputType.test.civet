@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import path from 'node:path';
-import { resolveOutputType, defaultOpts } from '../src/main-refactored.civet';
+import { resolveOutputType, defaultOpts } from '../src/main.civet';
 
 describe('resolveOutputType', () => {
   const cwd = '/app';

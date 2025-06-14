@@ -23,7 +23,7 @@ export class WorkerPool
         @pending = []
         @totalWorkers = 0
         // Do a synchronous existence check to guarantee immediate result
-        @poolAvailable = fs.existsSync(workerScriptPath)
+        @poolAvailable = fs.pathExistsSync(workerScriptPath)
     
     // async check no longer needed – kept for backwards compatibility (noop)
     async checkWorkerScript()

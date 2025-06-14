@@ -19,13 +19,11 @@ ora from "ora"
 { compile } from "@danielx/civet"
 { parseTree as jsoncParseTree, findNodeAtLocation as jsoncFindNodeAtLocation, getNodeValue as jsoncGetNodeValue, modify as jsoncModify, applyEdits as jsoncApplyEdits } from "jsonc-parser"
 { createRequire } from "node:module"
-import type { ParseError } from "jsonc-parser"
-// @ts-ignore
-import { BuildEngine } from "./engine.civet"
-import { loadHashesFromJSONL, writeHashesToJSONL } from "./jsonl-helpers.civet"
-// @ts-ignore – Micromatch ships its own types in modern versions; fallback suppress
-import micromatch from "micromatch"
-import { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
+type { ParseError } from "jsonc-parser"
+{ BuildEngine } from "./engine.civet"
+{ loadHashesFromJSONL, writeHashesToJSONL } from "./jsonl-helpers.civet"
+micromatch from "micromatch"
+{ findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 // ------------------------------------------------------------------
 // Global build fingerprint – any change forces full rebuilds
@@ -194,7 +192,7 @@ manifestFile := (cwd: string) => join(manifestDir(cwd), "manifest.json")
 hashManifestFile := (cwd: string) => join(manifestDir(cwd), "hashes.jsonl")
 
 loadJSON := async (file: string, fallback: any) =>
-    if await fs.exists(file)
+    if await fs.pathExists(file)
         try
             JSON.parse(await fs.readFile(file, "utf8"))
         catch
@@ -284,10 +282,10 @@ export compileSource := async (ctx: BuildContext, file: string): Promise<Compile
     prev := ctx.prevHashes[file]
     logDebug("[COMPILE] Sig check", { file, signature, prevSig: prev?.sig })
     try 
-        if (prev && prev.sig == signature && prev.outFile == expectedOut && await fs.exists(expectedOut)) 
+        if (prev && prev.sig == signature && prev.outFile == expectedOut && await fs.pathExists(expectedOut)) 
             // outputs are guaranteed to be correct – quick skip
             ctx.outFiles.add(expectedOut)
-            if (ctx.opts.mapFiles && await fs.exists(expectedOut + ".map")) 
+            if (ctx.opts.mapFiles && await fs.pathExists(expectedOut + ".map")) 
                 ctx.outFiles.add(expectedOut + ".map")
             logDebug("[COMPILE] Skipping (signature match)", file)
             return { status: "skip", file, outFile: expectedOut, signature: signature }
@@ -426,7 +424,7 @@ pruneStaleOutputs := async (ctx: BuildContext) =>
     stale := [...ctx.prevGenerated].filter((f) => !ctx.outFiles.has(f))
     for file of stale
         try
-            if await fs.exists(join(ctx.cwd, file))
+            if await fs.pathExists(join(ctx.cwd, file))
                 await fs.unlink(join(ctx.cwd, file))
         catch _
             // best effort – ignore deletion errors
