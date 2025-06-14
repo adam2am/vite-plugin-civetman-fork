@@ -66,10 +66,17 @@ type BuildContext =
 computeHash := (input: string): string =>
     crypto.createHash("sha1").update(input).digest("hex")
 
+// ---------------- debug ----------------
+outputDebug := true  // enable by env var
+logDebug := (...args: any[]) =>
+    if outputDebug
+        console.log("[civetman-debug]", ...args)
+
 // ------------------------------------------------------------------
 // Atomic write utility ensures we never leave partially-written files
 // ------------------------------------------------------------------
 safeWrite := async (filePath: string, data: string | Buffer) =>
+    await fs.ensureDir(path.dirname(filePath))
     tmp := filePath + "." + crypto.randomUUID() + ".civetmantmp"
     await fs.writeFile(tmp, data)
     await fs.rename(tmp, filePath)
@@ -87,7 +94,7 @@ fileToOutFile := (file: string, tsx: boolean) =>
     file.replace(".civet", tsx ? ".tsx" : ".ts")
 
 // Decide ts vs tsx based on CLI options / folder flags
-resolveOutputType := (ctx: BuildContext, file: string): boolean =>
+resolveOutputType := (ctx: { cwd: string, opts: Options }, file: string): boolean =>
     relativeFile := path.relative(ctx.cwd, file)
 
     findLongestMatch := (dirs: string[]) =>
@@ -139,63 +146,93 @@ loadPrevState := async (cwd: string) =>
     { prevGenerated, prevHashes }
 
 saveNewState := async (ctx: BuildContext) =>
+    logDebug("[STATE] Saving new state", { outFiles: [...ctx.outFiles], hashCount: Object.keys(ctx.newHashes).length })
+    allHashes := { ...ctx.prevHashes, ...ctx.newHashes }
     await saveJSON(manifestFile(ctx.cwd), { version: 1, generated: [...ctx.outFiles] })
-    await saveJSON(hashManifestFile(ctx.cwd), ctx.newHashes)
+    await saveJSON(hashManifestFile(ctx.cwd), allHashes)
+    logDebug("[STATE] State saved successfully")
 
 // ---------------- compilation (pure, worker-thread ready) ----------------
-compileSource := async (ctx: BuildContext, file: string) =>
+compileSource := async (ctx: BuildContext, file: string) => {
     // decide output type & expected filename
     isTsx := resolveOutputType(ctx, file)
     expectedOut := fileToOutFile(file, isTsx)
+    logDebug("[COMPILE] Starting compilation", { file, expectedOut, isTsx })
 
     // incremental skip logic
     content := await fs.readFile(file, "utf8")
     newHash := computeHash(content)
     prev := ctx.prevHashes[file]
+    logDebug("[COMPILE] Hash check", { file, newHash, prevHash: prev?.hash })
 
-    if prev && prev.hash == newHash && prev.outFile == expectedOut && await fs.exists(expectedOut)
-        ctx.outFiles.add expectedOut
-        ctx.newHashes[file] = { hash: newHash, outFile: expectedOut }
-        return "skip"
-
+    try
+        if prev && prev.hash == newHash && prev.outFile == expectedOut && await fs.exists(expectedOut)
+            sourceMtime := (await fs.stat(file)).mtimeMs
+            outMtime := (await fs.stat(expectedOut)).mtimeMs
+            logDebug("[COMPILE] Checking mtimes", { file, sourceMtime, outMtime })
+            if outMtime > sourceMtime
+                logDebug("[COMPILE] Skipping (up to date)", file)
+                ctx.outFiles.add(expectedOut)
+                ctx.newHashes[file] = { hash: newHash, outFile: expectedOut }
+                return { status: "skip", file, outFile: expectedOut }
+    catch _
+        logDebug("[COMPILE] Error during mtime check", file)
+        // if stat fails, just fall through to build
+    
     // actual compile
     try
+        logDebug("[COMPILE] Starting actual compilation", file)
         { code, sourceMap } := await compile(content, { filename: file, sourceMap: true }) as { code: string, sourceMap: any }
+        logDebug("[COMPILE] Compilation successful", file)
 
         // --- Source-map handling -----------------------------------------
-        codeWithMap .= code
+        codeOut .= code
         mapFile := expectedOut + ".map"
 
-        // 1. Inline source-map data URI
         if ctx.opts.inlineMap == "full"
             mapJson := sourceMap.json(file, expectedOut)
             base64Map := Buffer.from(JSON.stringify(mapJson)).toString("base64")
-            codeWithMap += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
+            codeOut += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
 
-        // 2. External .map file when requested
         if ctx.opts.mapFiles
             await safeWrite(mapFile, JSON.stringify(sourceMap.json(file, expectedOut)))
 
             if ctx.opts.inlineMap == "fileurl"
-                codeWithMap += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"
+                codeOut += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"
 
-        // Write final code (with or without inline map reference)
-        await safeWrite(expectedOut, codeWithMap)
+        await safeWrite(expectedOut, codeOut)
         ctx.outFiles.add expectedOut
         ctx.newHashes[file] = { hash: newHash, outFile: expectedOut }
-        return "built"
+        logDebug("built", file)
+        return { status: "built", file, outFile: expectedOut }
     catch e
         // propagate error – UI layer decides what to log/exit
         throw e
+}
 
 // ---------------- task-queue orchestrator ----------------
-compileAll := async (ctx: BuildContext) =>
+compileAll := async (ctx: BuildContext, onProgress?: (result: any) => void) => {
     concurrency: number := Math.max(1, ctx.opts.concurrency ?? defaultOpts.concurrency ?? 2)
     limitFn := pLimit(concurrency)
-    results := await Promise.all ctx.sources.map((file) => limitFn(() => compileSource(ctx, file)))
-    return results
+
+    handleResult := (promise: Promise<any>, file: string) =>
+        promise.then((value: any) => {
+            onProgress?.({ ...value, status: value.status })
+        }).catch((error: any) => {
+            onProgress?.({ file, status: 'error', error })
+            throw error
+        })
+    
+    tasks := ctx.sources.map((file) => limitFn(() => handleResult(compileSource(ctx, file), file)))
+    
+    return Promise.allSettled(tasks)
+}
 
 // ---------------- side-effect helpers (IDE, gitignore) ----------------
+syncIDEConfigs := async (ctx: BuildContext) =>
+    await addVscodeExcludes(ctx)
+    await addGitignoreEntries(ctx)
+
 addVscodeExcludes := async (ctx: BuildContext) =>
     // Build the list of patterns we should hide inside VS Code
     files .= [...ctx.outFiles]
@@ -316,33 +353,56 @@ runBuild := async (cwd: string, opts: Options) =>
         prevHashes: prevHashes,
         newHashes: {}
 
-    // Step 3: build all
-    await compileAll(ctx)
+    // Step 3: build all, with progress reporting
+    spinner := ora(c.blue("Building Civet files")).start()
+    hadError .= false
+    builtCount .= 0
+    skippedCount .= 0
 
-    // Step 4: prune stale outputs & save new state (TODO: implement prune)
+    onProgress := (res: any) => {
+        if res.status == 'built'
+            spinner.succeed(c.cyan(res.file) + " -> " + c.green(res.outFile))
+            builtCount++
+        else if res.status == 'skip'
+            skippedCount++
+        else if res.status == 'error'
+            hadError = true
+            spinner.fail(c.red(`Error compiling ${res.file}`))
+            console.error(res.error)
+    }
+
+    await compileAll(ctx, onProgress)
+    
+    finalMessage .= `Built ${builtCount} file(s)`
+    if skippedCount > 0
+        finalMessage = `${finalMessage}, ${skippedCount} skipped`
+
+    if !hadError
+        spinner.succeed(c.green(`Build complete! ${finalMessage}`))
+    else
+        spinner.fail(c.red(`Build failed. ${finalMessage}`))
+
+    // Step 4: prune stale outputs & save new state
     await pruneStaleOutputs(ctx)
 
     await saveNewState(ctx)
 
     // Step 5: IDE / VCS hygiene
-    await addVscodeExcludes(ctx)
-    await addGitignoreEntries(ctx)
+    await syncIDEConfigs(ctx)
+
+    if hadError
+        throw new Error("Build failed with errors")
+
+    // Make sure the returned context is up-to-date for watch mode
+    ctx.prevGenerated = new Set([...ctx.outFiles])
+    ctx.prevHashes = { ...ctx.prevHashes, ...ctx.newHashes }
+    ctx.newHashes = {}
 
     return ctx
 
 // ──────────────────────────────────────────────────────────────
 // UI layer – Responsible for colours, spinners, CLI exit codes   
 // ──────────────────────────────────────────────────────────────
-
-spinnerWrap := async (title: string, fn: Function) =>
-    spin := ora(c.blue(title)).start()
-    try
-        res := await fn(spin)
-        spin.succeed()
-        return res
-    catch e
-        spin.fail()
-        throw e
 
 // CLI command – build
 registerBuildCommand := =>
@@ -352,66 +412,129 @@ registerBuildCommand := =>
             cwd := process.cwd()
             opts := { ...defaultOpts, ...program.opts<Options>() }
             try
-                await spinnerWrap("Building Civet files", => runBuild(cwd, opts))
+                await runBuild(cwd, opts)
                 console.log c.green("\nCivetman finished building!")
             catch e
-                console.error c.red("Build failed ☠"), e
+                // runBuild will have already logged details
                 process.exitCode = 1
                 return
 
+// ---------------- watch mode helpers ----------------
+createWatcher := (cwd: string) ->
+    chokidar.watch(cwd, {
+        ignored: [/node_modules/, /dist/, /(^|[\/\\])\../], // ignore dotfiles
+        persistent: true,
+        ignoreInitial: true,
+        usePolling: true, // for max reliability in tests
+        interval: 100,
+        binaryInterval: 300,
+        awaitWriteFinish: {
+            stabilityThreshold: 100,
+            pollInterval: 100
+        }
+    })
+
+// Helper to add all watch-event listeners to a chokidar watcher instance
+attachWatchHandlers := (watcher: any, 
+                        ctx: BuildContext, 
+                        cwd: string, 
+                        saveStateAndSync: () => void, 
+                        rebuildOne: (file: string) => void) ->
+    watcher.on 'ready', ->
+        logDebug("[WATCHER] Initial scan complete and ready for changes")
+        logDebug("[WATCHER] Watched paths:", watcher.getWatched())
+        console.log(c.blue("Watching for changes"))
+
+    watcher.on 'all', (event: string, changedPath: string) ->
+        if !changedPath.endsWith('.civet') return // only care about civet files
+        logDebug("[WATCHER] Event:", event, "on path:", changedPath)
+
+    watcher.on 'error', (err: unknown) ->
+        logDebug("[WATCHER] Error in watcher:", err)
+
+    watcher.on "add", (abs: string) ->
+        file := path.relative(cwd, abs)
+        logDebug("[WATCHER_ADD] File added", file)
+        if !ctx.sources.includes(file)
+            ctx.sources.push file
+            logDebug("[WATCHER_ADD] Added to sources list", file)
+        rebuildOne(file)
+    watcher.on "change", (abs: string) ->
+        file := path.relative(cwd, abs)
+        logDebug("[WATCHER_CHANGE] File changed", file)
+        rebuildOne(file)
+    watcher.on "unlink", async (abs: string) =>
+        file := path.relative(cwd, abs)
+        logDebug("[WATCHER_UNLINK] File removed", file)
+        ctx.sources = ctx.sources.filter((f: string) => f != file)
+        delete ctx.prevHashes[file]
+        delete ctx.newHashes[file]
+        tsFile := fileToOutFile(file, false)
+        tsxFile := fileToOutFile(file, true)
+        for out of [tsFile, tsxFile]
+            try {
+                if await fs.exists(out)
+                    logDebug("[WATCHER_UNLINK] Removing output file", out)
+                    await fs.unlink(out)
+                if await fs.exists(out + ".map")
+                    logDebug("[WATCHER_UNLINK] Removing map file", out + ".map")
+                    await fs.unlink(out + ".map")
+            } catch (e) {
+                logDebug("[WATCHER_UNLINK] Error removing file", out, e)
+            }
+            ctx.outFiles.delete(out)
+        saveStateAndSync()
+
 // ---------------- watch mode ----------------
 registerDevCommand := =>
+    logDebug("[WatchMode] Registering dev command")
     devAction := async (): Promise<void> =>
+        logDebug("[WatchMode] Executing dev action")
         cwd := process.cwd()
         opts := { ...defaultOpts, ...program.opts<Options>() }
         try
             console.log c.blue("Civetman starts building in watch mode…\n")
             ctx := await runBuild(cwd, opts)
             console.log c.green("Initial build complete! Watching for changes…\n")
-            syncConfigs := debounce(async =>
-                await addVscodeExcludes(ctx)
-                await addGitignoreEntries(ctx)
+            
+            saveStateAndSync := debounce(async =>
+                logDebug("[STATE_SYNC] Starting state sync")
+                ctx.prevHashes = { ...ctx.prevHashes, ...ctx.newHashes }
+                ctx.newHashes = {}
+                await saveNewState(ctx)
+                await syncIDEConfigs(ctx)
+                logDebug("[STATE_SYNC] State sync complete")
             , 800)
-            watcher := chokidar.watch("**/*.civet", { cwd, ignored: [/node_modules/, /dist/] })
+
+            // Define rebuildOne before creating watcher so it is in scope
             rebuildOne := async (file: string) =>
+                logDebug("[REBUILD_ONE] Starting rebuild for", file)
                 try
-                    await compileSource(ctx, file)
-                    if ctx.newHashes[file]
-                        ctx.prevHashes[file] = ctx.newHashes[file]
-                    ctx.newHashes = {}
-                    syncConfigs()
+                    result := await compileSource(ctx, file)
+                    if result.status == 'built'
+                        logDebug("[REBUILD_ONE] Successfully built", file, "->", result.outFile)
+                        console.log c.green('  ✓ ' + c.cyan(result.file) + " -> " + c.green(result.outFile))
+                    saveStateAndSync()
                 catch e
+                    logDebug("[REBUILD_ONE] Error compiling", file, e)
                     console.error("Civetman error compiling", file, e)
-            watcher.on "add", (abs) ->
-                file := path.relative(cwd, abs)
-                if !ctx.sources.includes(file)
-                    ctx.sources.push file
-                rebuildOne(file)
-            watcher.on "change", (abs) ->
-                file := path.relative(cwd, abs)
-                rebuildOne(file)
-            watcher.on "unlink", async (abs) =>
-                file := path.relative(cwd, abs)
-                ctx.sources = ctx.sources.filter((f) => f != file)
-                tsFile := fileToOutFile(file, false)
-                tsxFile := fileToOutFile(file, true)
-                for out of [tsFile, tsxFile]
-                    if await fs.exists(out)
-                        await fs.unlink(out)
-                    if await fs.exists(out + ".map")
-                        await fs.unlink(out + ".map")
-                    ctx.outFiles.delete(out)
-                syncConfigs()
+
+            logDebug("[WATCHER] Setting up watcher in directory:", path.resolve(cwd))
+            watcher := createWatcher(cwd)
+            logDebug("[WATCHER] Watcher instance created:", !!watcher)
+            attachWatchHandlers(watcher, ctx, cwd, saveStateAndSync, rebuildOne)
+            
             process.on "SIGINT", async =>
                 watcher.close()
+                // Persist final state before exiting
+                ctx.prevHashes = { ...ctx.prevHashes, ...ctx.newHashes }
+                ctx.newHashes = {}
                 await saveNewState(ctx)
                 console.log("\nCivetman watch stopped.")
                 process.exit()
-            return
         catch e
             console.error c.red("Watch mode failed"), e
             process.exitCode = 1
-            return
     program.command "dev"
         .description "Watch .civet files and rebuild on change"
         .action devAction
@@ -444,6 +567,13 @@ export default () =>
 debounce := (func: Function, timeout = 1000) ->
     timer: NodeJS.Timeout | null .= null
     (...args: any[]) ->
+        logDebug("[DEBOUNCE] Debouncing call with args", args)
         if timer?
+            logDebug("[DEBOUNCE] Clearing previous timer")
             clearTimeout(timer)
-        timer = setTimeout (-> func(...args)), timeout
+        timer = setTimeout (->
+            logDebug("[DEBOUNCE] Executing debounced function")
+            func(...args)
+        ), timeout
+
+export computeHash, resolveOutputType, defaultOpts

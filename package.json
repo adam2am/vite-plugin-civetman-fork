@@ -33,7 +33,8 @@
   "scripts": {
     "build:cli": "npx vite build builtin-civetman-fork --config builtin-civetman-fork/vite.config.cli.ts",
     "build:tsup": "tsup",
-    "build": "npm run build:cli && npm run build:tsup && mkdir -p dist/cli && cp builtin-civetman-fork/dist/index.js dist/cli/index.js"
+    "build": "npm run build:cli && npm run build:tsup && mkdir -p dist/cli && cp builtin-civetman-fork/dist/index.js dist/cli/index.js",
+    "test": "mocha --config mocha.json"
   },
   "dependencies": {
     "@danielx/civet": "^0.10.4",
@@ -44,21 +45,25 @@
     "fs-extra": "^11.1.0",
     "jsonc-parser": "^3.3.1",
     "ora": "^8.2.0",
+    "p-limit": "^6.2.0",
     "picocolors": "^1.0.0",
     "type-fest": "^4.41.0"
   },
   "devDependencies": {
     "@rollup/plugin-typescript": "^12.1.2",
     "@types/fs-extra": "^11.0.1",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^24.0.0",
     "@vitejs/plugin-react": "^4.5.1",
+    "mocha": "^11.6.0",
     "prettier": "^3.5.3",
     "rollup-plugin-add-shebang": "^0.3.1",
     "tslib": "^2.8.1",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",
-    "vite-plugin-civet": "^0.2.5"
+    "vite-plugin-civet": "^0.2.5",
+    "vitest": "^1.5.0"
   },
   "peerDependencies": {
     "vite": "^6.0.0"

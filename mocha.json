@@ -1,0 +1,13 @@
+{
+  "extension": [
+    "civet"
+  ],
+  "require": [
+    "./node_modules/@danielx/civet/register"
+  ],
+  "reporter": "dot",
+  "recursive": true,
+  "spec": [
+    "builtin-civetman-fork/tests"
+  ]
+}

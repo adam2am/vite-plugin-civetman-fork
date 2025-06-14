@@ -170,3 +170,15 @@ dist
 
 dist
 .vscode
+/.civetman/
+
+# civetman:start - Managed by civetman. DO NOT EDIT THIS BLOCK.
+builtin-civetman-fork/src/main-refactored.ts
+builtin-civetman-fork/src/main.ts
+builtin-civetman-fork/tests/computeHash.test.ts
+builtin-civetman-fork/src/oldmain.ts
+builtin-civetman-fork/tests/resolveOutputType.test.ts
+builtin-civetman-fork/tests/watchMode.test.ts
+builtin-civetman-fork/tests/fixture/dummy.ts
+builtin-civetman-fork/tests/temp-watch-test/dummy.ts
+# civetman:end - End of civetman managed block.
