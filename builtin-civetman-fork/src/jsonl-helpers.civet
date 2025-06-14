@@ -5,40 +5,40 @@ import fs from "fs-extra"
 import path from "node:path"
 
 // A record in our hashes.jsonl file
-type HashEntry = {
+type HashEntry = 
     file: string,
     sig: string,
     outFile: string
-}
+
 
 // Reads a .jsonl file and reconstructs the latest state for each key.
 // The last entry for any given file path wins.
-export loadHashesFromJSONL := async (filePath: string): Promise<Record<string, { sig: string, outFile: string }>> => {
-    try
-        if !(await fs.exists(filePath)) return {}
-        
-        content := await fs.readFile(filePath, "utf8")
-        lines := content.split('\n')
-        
-        map: Record<string, { sig: string, outFile: string }> := {}
+export loadHashesFromJSONL := 
+    async (filePath: string): Promise<Record<string, { sig: string, outFile: string }>> => 
+        try
+            unless await fs.exists(filePath) return {}
+            content := await fs.readFile(filePath, "utf8")
+            lines := content.split('\n')
+            
+            map: Record<string, { sig: string, outFile: string }> := {}
 
-        for line of lines
-            if !line.trim() continue
-            try
-                entry := JSON.parse(line) as HashEntry
-                map[entry.file] = { sig: entry.sig, outFile: entry.outFile }
-            catch _
-                // ignore corrupted lines, let the last valid one win
-                continue
-        return map
-    catch _
-        // On any error, return empty map to force a full rebuild.
-        return {}
-}
+            for line of lines
+                if !line.trim() continue
+                try
+                    entry := JSON.parse(line) as HashEntry
+                    map[entry.file] = { sig: entry.sig, outFile: entry.outFile }
+                catch _
+                    // ignore corrupted lines, let the last valid one win
+                    continue
+            return map
+        catch _
+            // On any error, return empty map to force a full rebuild.
+            return {}
+
 
 // Appends a single record to a .jsonl file.
-export appendHashToJSONL := async (filePath: string, entry: HashEntry): Promise<void> => {
-    await fs.ensureDir(path.dirname(filePath))
-    line := JSON.stringify(entry) + '\n'
-    await fs.appendFile(filePath, line)
-} 
+export appendHashToJSONL := 
+    async (filePath: string, entry: HashEntry) => 
+        await fs.ensureDir(path.dirname(filePath))
+        line := JSON.stringify(entry) + '\n'
+        await fs.appendFile(filePath, line)

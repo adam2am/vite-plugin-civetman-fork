@@ -1,0 +1,29 @@
+// --------------------------------------------------------------
+// compileWorker.civet – runs inside a worker thread (pure CPU compile step)
+// --------------------------------------------------------------
+import { parentPort } from "node:worker_threads"
+import { compile } from "@danielx/civet"
+import fs from "node:fs/promises"
+
+// This script must be run as a worker.
+unless parentPort
+    throw new Error("Must be run as a worker thread.")
+
+// Listen for a message from the main thread.
+parentPort!.on "message", async (msg) =>
+    { file, content, isTsx } := msg
+    try
+        content := await fs.readFile(msg.file, "utf8")
+        // Perform the compilation.
+        { code, sourceMap } := await compile(content, { filename: msg.file, sourceMap: true })
+        
+        // The outFile path is needed to correctly generate the source map.
+        outFile := msg.file.replace('.civet', msg.isTsx ? '.tsx' : '.ts')
+        mapJson := sourceMap.json(msg.file, outFile)
+        plainMap := JSON.parse(JSON.stringify(mapJson))
+
+        // Send the successful result back to the main thread.
+        parentPort!.postMessage({ ok: true, code, mapJson: plainMap })
+    catch error
+        // If compilation fails, send an error message back.
+        parentPort!.postMessage({ ok: false, error: String(error) }) 

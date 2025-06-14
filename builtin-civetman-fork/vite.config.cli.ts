@@ -3,10 +3,14 @@ import civetVitePlugin from "@danielx/civet/vite"
 
 export default defineConfig({
   build: {
+    ssr: true,
     lib: {
-      entry: { 'index': './index.ts' },
-      formats: ["es"],
-      fileName: () => 'index.js'
+      entry: {
+        'index': './index.ts',
+        'workers/compileWorker': './src/workers/compileWorker.civet'
+      },
+      formats: ["es", "cjs"],
+      fileName: (format, entryName) => format === 'es' ? `${entryName}.js` : `${entryName}.cjs`
     },
     minify: false,
     rollupOptions: {

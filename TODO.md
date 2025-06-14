@@ -50,6 +50,12 @@ All tasks use `[ ]` check-boxes so they can be ticked off as they land.
 ---
 
 ## 3. Worker-Thread Pool for Compilation
+main thread          worker thread
+───────────────┬────────────────────────
+hash / skip?   │
+read file       ───►  compile(content)  │
+write .ts/.tsx │  ◄──  {code, map}      │
+state updates   │
 
 - [ ] **Context**  
   Compilation is CPU-bound but still runs on the main thread; `p-limit` restricts concurrency but doesn't scale across cores.

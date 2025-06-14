@@ -33,7 +33,7 @@
   "scripts": {
     "build:cli": "npx vite build builtin-civetman-fork --config builtin-civetman-fork/vite.config.cli.ts",
     "build:tsup": "tsup",
-    "build": "npm run build:cli && npm run build:tsup && mkdir -p dist/cli && cp builtin-civetman-fork/dist/index.js dist/cli/index.js",
+    "build": "npm run build:cli && npm run build:tsup && mkdir -p dist/cli && cp builtin-civetman-fork/dist/index.js dist/cli/index.js && cp -R builtin-civetman-fork/dist/workers dist/cli/",
     "test": "mocha --config mocha.json"
   },
   "dependencies": {

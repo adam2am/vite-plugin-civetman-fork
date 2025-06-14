@@ -1,75 +1,116 @@
 // --------------------------------------------------------------
-// engine.civet – shared BuildEngine for build & watch pipelines
+// engine.civet – shared BuildEngine for build & watch pipelines 
+// decides skip-vs-compile, delegates to pool, then calls writeOutputAndGetResult
 // --------------------------------------------------------------
 
-pLimit from "p-limit"
-fs from "fs-extra"
+import fs from "fs-extra"
+import { WorkerPool } from "./workerPool.civet"
 
-// Import compileSource and types from the main module for now.
-// Later we may extract them into a separate pure module.
-{ compileSource } from "./main-refactored.civet"
+// Import helpers and types from the main module.
+import { 
+    writeOutputAndGetResult,
+    resolveOutputType,
+    computeHash,
+    buildFingerprint,
+    fileToOutFile,
+    logDebug,
+    type BuildContext, 
+    type CompileResult 
+} from "./main-refactored.civet"
+import { compile } from "@danielx/civet"
 
-// BuildContext type re-exported from main-refactored so we stay DRY.
-{ type BuildContext, type CompileResult } from "./main-refactored.civet"
-
-export class BuildEngine {
+export class BuildEngine
     ctx: BuildContext
-    limitFn: Function
+    pool: WorkerPool
     inFlight: Map<string, Promise<any>>
 
     constructor(ctx: BuildContext)
         @ctx = ctx
-        // Use same concurrency heuristic as current code path.
-        const concurrency = Math.max(1, ctx.opts.concurrency ?? 2)
-        @limitFn = pLimit(concurrency)
+        concurrency := Math.max(1, (@ctx.opts.concurrency ?? 1))
+        @pool = new WorkerPool(concurrency)
         @inFlight = new Map<string, Promise<any>>()
-
 
     // Build / rebuild *all* sources currently in ctx.sources
     async buildAll(onProgress?: (result: CompileResult) => void)
-        tasks := this.ctx.sources.map((file) => this.build(file, onProgress))
+        tasks := @ctx.sources.map (file) => @build(file, onProgress)
         await Promise.allSettled(tasks)
-    
 
     // Build a single file. Dedupe if already in progress.
-    build(file: string, onProgress?: (result: CompileResult) => void) 
+    build(file: string, onProgress?: (result: CompileResult) => void)
         if @inFlight.has(file)
             return @inFlight.get(file)!
 
-        task := @limitFn async =>
-            try
-                result := await compileSource(this.ctx, file)
-                onProgress?.(result)
-                return result
-            catch error
-                onProgress?.({ file, status: 'error', error: error })
-                // Do not rethrow, allowing Promise.allSettled to continue with other files.
-        
+        task := @runCompileTask(file).then (result: CompileResult) =>
+            onProgress?.(result)
+            return result
+        .catch (error: any) =>
+            result := { file, status: 'error', error: error } as CompileResult
+            onProgress?.(result)
+            return result
+
         // Track promise for deduplication.
         @inFlight.set(file, task)
         // Clean up once finished.
-        task.finally(() => @inFlight.delete(file))
+        task.finally => @inFlight.delete(file)
         return task
-    
+
+    async runCompileTask(file: string): Promise<CompileResult>
+        isTsx := resolveOutputType(@ctx, file)
+        content := await fs.readFile(file, "utf8")
+        signature := computeHash(
+            content +
+            JSON.stringify({ tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles }) +
+            buildFingerprint
+        )
+
+        // Skip check
+        prev := @ctx.prevHashes[file]
+        expectedOut := fileToOutFile(file, isTsx)
+        if prev and prev.sig == signature and prev.outFile == expectedOut and await fs.exists(expectedOut)
+            @ctx.outFiles.add(expectedOut)
+            if @ctx.opts.mapFiles and await fs.exists(expectedOut + ".map")
+                @ctx.outFiles.add(expectedOut + ".map")
+            logDebug("[COMPILE] Skipping (signature match)", file)
+            return { status: "skip", file, outFile: expectedOut, signature: signature }
+
+        code .= ""
+        mapJson .= null
+
+        // Use worker pool if available and concurrency allows, otherwise compile in-process.
+        if (@ctx.opts.concurrency ?? 1) > 1 and @pool.poolAvailable
+            logDebug("[COMPILE] Compiling with worker", file)
+            workerResult := await @pool.exec({ file, isTsx, inlineMap: @ctx.opts.inlineMap })
+            code = workerResult.code
+            mapJson = workerResult.mapJson
+        else
+            logDebug("[COMPILE] Compiling in-process", file)
+            compileResult := await compile(content, { filename: file, sourceMap: true })
+            code = compileResult.code
+            mapJson = compileResult.sourceMap.json(file, expectedOut)
+
+        return await writeOutputAndGetResult(@ctx, file, isTsx, code, mapJson, signature)
 
     // Handle a source deletion.
     async remove(file: string)
-        // Remove from source list and hashes; delete outputs if they exist.
-        @ctx.sources = @ctx.sources.filter((f) => f !== file)
+        @ctx.sources = @ctx.sources.filter (f) => f !== file
         delete @ctx.prevHashes[file]
         delete @ctx.newHashes[file]
 
         tsFile := file.replace(".civet", ".ts")
         tsxFile := file.replace(".civet", ".tsx")
         for out of [tsFile, tsxFile]
-            try
-                if (await fs.exists(out))
-                    await fs.unlink(out)
-                if (await fs.exists(out + ".map")) 
-                    await fs.unlink(out + ".map")     
-            catch _
-                // best-effort
-            @ctx.outFiles.delete(out)
-            @ctx.outFiles.delete(out + ".map")
- }
+            await @removeOutputFile(out)
+    
+    async removeOutputFile(file: string)
+        try
+            if await fs.exists(file)
+                await fs.unlink(file)
+            if await fs.exists(file + ".map")
+                await fs.unlink(file + ".map")
+        catch _
+            // best-effort
+        
+        @ctx.outFiles.delete(file)
+        @ctx.outFiles.delete(file + ".map")
+    
 

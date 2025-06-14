@@ -13,7 +13,7 @@ glob from "fast-glob"
 { join } from "node:path"
 path from "node:path"
 os from "node:os"
-crypto from "node:crypto"
+{ createHash, randomUUID } from "node:crypto"
 chokidar from "chokidar"
 ora from "ora"
 { compile } from "@danielx/civet"
@@ -27,7 +27,7 @@ import { loadHashesFromJSONL, appendHashToJSONL } from "./jsonl-helpers.civet"
 // Global build fingerprint – any change forces full rebuilds
 // ------------------------------------------------------------------
 require := createRequire(import.meta.url)
-buildFingerprint := JSON.stringify({
+export buildFingerprint := JSON.stringify({
     civetmanVersion: "0.1.0", // bump on release
     civetCompilerVersion: require("@danielx/civet/package.json").version,
     nodeMajor: process.version.split(".")[0]
@@ -92,7 +92,7 @@ export type BuildContext =
 // ---------------- helper utils (pure) ----------------
 
 computeHash := (input: string): string =>
-    crypto.createHash("sha1").update(input).digest("hex")
+    createHash("sha1").update(input).digest("hex")
 
 // ---------------- debug ----------------
 // Debug logging – enable by setting CIVETMAN_DEBUG env var.
@@ -106,7 +106,7 @@ debugFilters := if debugEnv? and debugEnv != "*" and debugEnv.toLowerCase() != "
 else
     null
 
-logDebug := (...args: any[]) =>
+export logDebug := (...args: any[]) =>
     if !outputDebug return
     tag := typeof args[0] == "string" ? args[0].toUpperCase() : ""
     if debugFilters? and ![...debugFilters].some((f) => tag.includes(f))
@@ -118,7 +118,7 @@ logDebug := (...args: any[]) =>
 // ------------------------------------------------------------------
 safeWrite := async (filePath: string, data: string | Buffer) =>
     await fs.ensureDir(path.dirname(filePath))
-    tmp := filePath + "." + crypto.randomUUID() + ".civetmantmp"
+    tmp := filePath + "." + randomUUID() + ".civetmantmp"
     await fs.writeFile(tmp, data)
     await fs.rename(tmp, filePath)
 
@@ -131,7 +131,7 @@ cleanupTmpFiles := async (cwd: string) =>
         catch _
             continue
 
-fileToOutFile := (file: string, tsx: boolean) =>
+export fileToOutFile := (file: string, tsx: boolean) =>
     file.replace(".civet", tsx ? ".tsx" : ".ts")
 
 // Decide ts vs tsx based on CLI options / folder flags
@@ -199,66 +199,88 @@ saveNewState := async (ctx: BuildContext) =>
 
     logDebug("[STATE] State saved successfully")
 
+// Handles writing the output of a successful compilation to disk.
+// This is used by both the in-process and worker-based compilation paths.
+export writeOutputAndGetResult := async (
+    ctx: BuildContext,
+    file: string,
+    isTsx: boolean,
+    code: string,
+    mapJson: any,
+    signature: string
+): Promise<CompileResult> => {
+    const expectedOut = fileToOutFile(file, isTsx)
+    let codeOut = code
+    const mapFile = expectedOut + ".map"
+
+    if (ctx.opts.inlineMap == "full" && mapJson) {
+        const base64Map = Buffer.from(JSON.stringify(mapJson)).toString("base64")
+        codeOut += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
+    }
+
+    if (ctx.opts.mapFiles && mapJson) {
+        await safeWrite(mapFile, JSON.stringify(mapJson))
+        ctx.outFiles.add(mapFile)
+
+        if (ctx.opts.inlineMap == "fileurl") {
+            codeOut += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"
+        }
+    }
+
+    await safeWrite(expectedOut, codeOut)
+    ctx.outFiles.add(expectedOut)
+    logDebug("built", file)
+    return { status: "built", file, outFile: expectedOut, signature }
+}
+
 // ---------------- compilation (pure, worker-thread ready) ----------------
+// This function is now only used for IN-PROCESS compilation.
+// The worker bypasses this and calls the Civet compiler directly.
 export compileSource := async (ctx: BuildContext, file: string): Promise<CompileResult> => {
     // decide output type & expected filename
-    isTsx := resolveOutputType(ctx, file)
-    expectedOut := fileToOutFile(file, isTsx)
+    const isTsx = resolveOutputType(ctx, file)
+    const expectedOut = fileToOutFile(file, isTsx)
     logDebug("[COMPILE] Starting compilation", { file, expectedOut, isTsx })
 
     // compute deterministic signature for incremental builds ------------
-    content := await fs.readFile(file, "utf8")
-    signature := computeHash(
+    const content = await fs.readFile(file, "utf8")
+    const signature = computeHash(
         content +
         JSON.stringify({ tsx: isTsx, inlineMap: ctx.opts.inlineMap, mapFiles: ctx.opts.mapFiles }) +
         buildFingerprint
     )
 
-    prev := ctx.prevHashes[file]
+    const prev = ctx.prevHashes[file]
     logDebug("[COMPILE] Sig check", { file, signature, prevSig: prev?.sig })
 
-    try
-        if prev and prev.sig == signature and prev.outFile == expectedOut and await fs.exists(expectedOut)
+    try {
+        if (prev && prev.sig == signature && prev.outFile == expectedOut && await fs.exists(expectedOut)) {
             // outputs are guaranteed to be correct – quick skip
             ctx.outFiles.add(expectedOut)
-            if ctx.opts.mapFiles and await fs.exists(expectedOut + ".map")
+            if (ctx.opts.mapFiles && await fs.exists(expectedOut + ".map")) {
                 ctx.outFiles.add(expectedOut + ".map")
+            }
             logDebug("[COMPILE] Skipping (signature match)", file)
             return { status: "skip", file, outFile: expectedOut, signature: signature }
-    catch _
+        }
+    } catch (_) {
         logDebug("[COMPILE] Error during sig check", file)
         // fall through to compile on any error
+    }
     
     // actual compile
-    try
-        logDebug("[COMPILE] Starting actual compilation", file)
-        { code, sourceMap } := await compile(content, { filename: file, sourceMap: true }) as { code: string, sourceMap: any }
-        logDebug("[COMPILE] Compilation successful", file)
+    try {
+        logDebug("[COMPILE] Starting actual in-process compilation", file)
+        const { code, sourceMap } = await compile(content, { filename: file, sourceMap: true }) as { code: string, sourceMap: any }
+        logDebug("[COMPILE] In-process compilation successful", file)
 
-        // --- Source-map handling -----------------------------------------
-        codeOut .= code
-        mapFile := expectedOut + ".map"
+        const mapJson = sourceMap.json(file, expectedOut)
+        return await writeOutputAndGetResult(ctx, file, isTsx, code, mapJson, signature)
 
-        if ctx.opts.inlineMap == "full"
-            mapJson := sourceMap.json(file, expectedOut)
-            base64Map := Buffer.from(JSON.stringify(mapJson)).toString("base64")
-            codeOut += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
-
-        if ctx.opts.mapFiles
-            mapJson := sourceMap.json(file, expectedOut)
-            await safeWrite(mapFile, JSON.stringify(mapJson))
-            ctx.outFiles.add(mapFile)
-
-            if ctx.opts.inlineMap == "fileurl"
-                codeOut += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"
-
-        await safeWrite(expectedOut, codeOut)
-        ctx.outFiles.add expectedOut
-        logDebug("built", file)
-        return { status: "built", file, outFile: expectedOut, signature: signature }
-    catch e
+    } catch (e) {
         // propagate error – UI layer decides what to log/exit
         throw e
+    }
 }
 
 // ---------------- side-effect helpers (IDE, gitignore) ----------------
@@ -499,7 +521,7 @@ if !(global as any).__civetman_sigint_handler_registered
                 await saveNewState(ctxObj)
             catch _
                 continue
-        console.log("\nCivetman watch stopped.")
+        console.log("\nCivetman watch stopped (CLI).")
         process.exit()
 
 // Helper to add all watch-event listeners to a chokidar watcher instance

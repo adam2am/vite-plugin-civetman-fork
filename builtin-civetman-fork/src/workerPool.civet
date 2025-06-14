@@ -1,35 +1,63 @@
 // --------------------------------------------------------------
-// workerPool.civet – Minimal worker-thread pool for CPU tasks
+// workerPool.civet – Minimal worker-thread pool for CPU tasks (pool, acquire / release, exec)
 // --------------------------------------------------------------
 import { Worker } from "node:worker_threads"
 import os from "node:os"
+import fs from "fs-extra"
+import { fileURLToPath } from "node:url"
+
+// Resolve worker script path in an ESM-safe way
+const workerScriptPath = fileURLToPath(new URL('./workers/compileWorker.cjs', import.meta.url))
 
 // A very small pool implementation – good enough for our compile workers.
 export class WorkerPool
     size: number
     idle: Worker[]
-    pending: { worker: Worker, resolve: (w: Worker) => void }[]
+    pending: { resolve: (w: Worker) => void }[]
+    poolAvailable: boolean
 
     constructor(size = Math.max(1, os.cpus()?.length || 2))
         @size = size
         @idle = []
         @pending = []
+        @poolAvailable = false
+        @checkWorkerScript()
+    
+    async checkWorkerScript()
+        @poolAvailable = await fs.exists(workerScriptPath)
 
     // Acquire a worker (waiting if none free)
-    acquire :=  -> new Promise<(w: Worker)>(resolve =>
-        if @idle.length > 0
-            resolve(@idle.pop()!)
-        else if @idle.length + @pending.length < @size
-            worker := new Worker(new URL("./workers/compileWorker.cjs", import.meta.url))
-            resolve(worker)
-        else
-            @pending.push({ resolve })
-    )
+    acquire(): Promise<Worker>
+        return new Promise (resolve) => 
+            if (@idle.length > 0)
+                resolve(@idle.pop()!)
+            else if (@idle.length + @pending.length < @size)
+                worker := new Worker(workerScriptPath)
+                resolve(worker)
+            else
+                @pending.push({ resolve })
 
-    release := (w: Worker) ->
-        if @pending.length > 0
-            @pending.shift()!.resolve(w)
+    release(worker: Worker)
+        if (@pending.length > 0)
+            @pending.shift()!.resolve(worker)
         else
-            @idle.push(w)
+            @idle.push(worker)
 
+    // Run a task: compile given data in worker, returns promise
+    async exec(payload: any): Promise<any>
+        worker := await @acquire()
+        try
+            return await new Promise (resolve, reject) => 
+                handler := (msg: any) =>
+                    worker.off("message", handler)
+                    if (msg.ok) 
+                        resolve(msg)
+                    else
+                        reject(new Error(msg.error))
+                worker.on("message", handler)
+                worker.postMessage(payload)
+            
+        finally
+            @release(worker)    
+    
 export default WorkerPool 
