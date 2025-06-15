@@ -1,114 +1,88 @@
-# Civetman Refactor Road-map
-──────────────────────────────
-Expected impact on scores
-──────────────────────────────
-Scalability +1 (worker pool, streaming manifests)
-Robustness +1 (single engine, fewer code paths)
-Clarity ≈ (stays high; engine class is easier to grok)
-Future-proofing +1 (plugin bus)
-Performance +2 (no polling by default + multi-core compile + less IO)
-i.e. v1 could realistically reach ~8–9 across the board with the above refactors.
 
-All tasks use `[ ]` check-boxes so they can be ticked off as they land.
+### 🐈 civetman – Improvement Proposal Sketch  
 
 ---
 
-## 1. Merge Build & Watch Pipelines into a Single Engine
+## 1.  Cache `findCivetConfig` results  
 
-- [x] **Context**  
-  `runBuild → compileAll` (one-shot) and the `rebuildOne` logic in watch mode are near duplicates, leading to drift and bugs.
+### Context  
+Every compile task invokes  
+`findCivetConfig(ctx.cwd) → loadCivetConfig()`  
+which walks up the tree on every file. On large projects this can be thousands of filesystem hits per build or rebuild.
 
-- [x] **Idea & reasons**  
-  Factor out a reusable `BuildEngine` that exposes `buildAll`, `build(file)`, and `remove(file)`.  One code-path means fewer edge-cases and boosts robustness.
+### Why it’s appealing  
+• Direct speed-up for both one-shot builds and watch-mode rebounds.  
+• Implementation is tiny (memoize result + invalidate on known config-file events).  
+• Zero behavioural change for users.
 
-- [x] **Potential approach**  
-  1. Create `src/engine.civet` housing an `Engine` class that stores `ctx`, a `p-limit` pool, and a dedupe map.  
-  2. Re-implement `runBuild` and watch-mode so they simply call engine APIs.  
-  3. Delete/deprecate duplicated helpers in `main-refactored.civet`.
+### Potential approach  
+1. Inside `engine.civet` (and `main.civet` → `compileSource`) introduce:  
+   ```civet
+   configCache: Map<string, { path: string|null, cfg: any }>
+   ```  
+2. Memoise by `cwd` key.  
+3. Invalidate cache when chokidar watcher sees a change to  
+   `**/{tsconfig,package,🐈,civetconfig,civet.config}.{json,yml,yaml,civet,js}`.  
+   (The watch code already restarts LS — we can piggy-back.)  
 
-- [x] **Relevant places / files**  
-  `builtin-civetman-fork/src/main-refactored.civet` (sections compileAll + watch), new `src/engine.civet`, test updates.
-
----
-
-## 2. Stream / Append Manifests Instead of Re-writing
-
-- [x] **Context**  
-  `saveNewState` rewrites whole `manifest.json` and `hashes.json`, causing O(total files) IO.
-
-- [x] **Idea & reasons**  
-  Move to JSON-Lines (one JSON object per line) or a light embedded DB so only changed entries are written, improving performance on large repos.
-
-- [x] **Potential approach**  
-  1. Introduce `jsonlAppend(file, obj)` helper.  
-  2. On load stream file line-by-line into Map; on save append only new/changed lines.  
-  3. Keep a migration path that auto-detects old manifest version and converts.
-
-- [x] **Relevant places / files**  
-  `loadJSON`, `saveJSON`, `saveNewState` in `main-refactored.civet`; new `helpers/manifest.civet`.
+### Relevant places to touch  
+* `engine.civet` – `runCompileTask` (cache hit)  
+* `main.civet`  – `compileSource` (cache hit)  
+* `main.civet`  – watcher `attachWatchHandlers` or debounce block (cache clear)  
 
 ---
 
-## 3. Worker-Thread Pool for Compilation
-main thread          worker thread
-───────────────┬────────────────────────
-hash / skip?   │
-read file       ───►  compile(content)  │
-write .ts/.tsx │  ◄──  {code, map}      │
-state updates   │
+## 2.  Optional post-build TypeScript check (`tsc --noEmit`)  
 
-- [x] **Context**  
-  Compilation is CPU-bound but still runs on the main thread; `p-limit` restricts concurrency but doesn't scale across cores.
+### Context  
+Generated `.ts/.tsx` files compile fine syntactically, but type errors are only caught later by user’s own tooling.
 
-- [x] **Idea & reasons**  
-  Off-load `compileSource` to a worker pool to utilise multi-core CPUs → faster cold builds.
+### Why it’s appealing  
+• Immediate red-ink at build time, better CI guarantees.  
+• Opt-in flag keeps fast path unchanged (`--type-check` or `--strict`).  
 
-- [x] **Potential approach**  
-  1. Add `worker_threads` pool utility (`utils/workerPool.ts`).  
-  2. Wrap `compileSource` behind an adapter that decides between in-process vs worker based on `opts.concurrency`.  
-  3. Pass only serialisable data (file path & options) to workers.
+### Potential approach  
+1. Add CLI flag `--type-check` (boolean).  
+2. After `runBuild()` succeeds, spawn:  
+   ```bash
+   tsc -p <ctx.cwd> --noEmit --pretty false
+   ```  
+   Capture exit code; fail build if non-zero.  
+3. For monorepos, allow `--type-check <tsconfig-path>` override.  
 
-- [x] **Relevant places / files**  
-  `compileSource` in `main-refactored.civet`, new `workers/compileWorker.cjs`.
-
----
-
-## 4. Smarter Watcher Defaults
-
-- [x] **Context**  
-  Current watcher uses `usePolling: true`, which is reliable but CPU-heavy during dev.
-
-- [x] **Idea & reasons**  
-  Detect environment: default to native events locally, fall back to polling in CI or when `--force-polling` flag supplied.
-
-- [x] **Potential approach**  
-  1. Read `process.env.CI` and a new CLI flag.  
-  2. Pass `usePolling` accordingly when creating each chokidar watcher.  
-  3. Add docs.
-
-- [x] **Relevant places / files**  
-  `createWatcher` in `main-refactored.civet`, CLI options definition.
+### Relevant places to touch  
+* CLI wiring in `main.civet` (new option).  
+* End of `runBuild()` (step after IDE/VCS hygiene).  
+* Docs / README.  
 
 ---
 
-## 5. Public Plugin / Event Hooks
+## 4.  Windows-safe glob patterns  
 
-~~Plugin system deemed unnecessary – decided not to implement.~~
+### Context  
+`fast-glob` patterns like `"**/*.civetmantmp"` work on Unix but can mis-match on Windows because backslashes leak into the pattern.
 
-*All tasks considered complete by omission.*
+### Why it’s appealing  
+• Eliminates “file not ignored / deleted on Windows” bug reports.  
+• Very low effort: sanitize patterns once.
+
+### Potential approach  
+1. When building `ignorePatterns` (build and watch paths) run:  
+   ```civet
+   toPosix := (p) -> p.split(path.sep).join("/")
+   ignorePatterns = ignorePatterns.map(toPosix)
+   ```  
+2. Likewise, when generating dynamic patterns (`tmpGlob`) for VS Code or gitignore, build them with forward slashes unconditionally.
+
+### Relevant places to touch  
+* `main.civet` – `runBuild()` ignore list assembly.  
+* `main.civet` – `createWatcher()` ignore list assembly.  
+* `addVscodeExcludes` / `addGitignoreEntries` where patterns are emitted.
 
 ---
 
-## 6. Micro-optimisations & Housekeeping
-
-- [x] Cache file contents + hashes in memory during watch to avoid redundant disk reads.
-- [x] Skip `sourceMap.json()` call when both `inlineMap === 'none'` and `!opts.mapFiles`.
-- [x] Switch `debounce` helper to execute immediately on first call (`leading`) then batch later calls.
-- [ ] Tighten types and remove any `as any` casts.  
-- [ ] Add unit benchmarks for cold vs. warm builds.
-
-Relevant areas: `compileSource`, debounce util, tests/benchmarks.
-
----
-
-**End of list** 
+#### Next steps  
+1. Approve the three mini-features.  
+2. Land caching first (isolated, testable).  
+3. Add `--type-check` flag; integrate in CI workflow.  
+4. Patch glob building & run tests on Windows VM/GitHub-Actions matrix.

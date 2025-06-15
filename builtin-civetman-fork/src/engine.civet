@@ -66,10 +66,8 @@ export class BuildEngine
             readData := await fs.readFile(file, "utf8")
             @contentCache.set(file, readData)
             readData
-        // ---- Load Civet parseOptions once per task ----
-        configPath := await findCivetConfig(@ctx.cwd)
-        civetConfig := (configPath? ? await loadCivetConfig(configPath) : {}) || {}
-        parseOpts := civetConfig?.parseOptions
+        // Reuse parseOptions loaded once at the start of the build run
+        parseOpts := @ctx.parseOpts ?? null
 
         signature := makeSignature(content, { tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles, parseOpts })
 

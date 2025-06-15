@@ -45,7 +45,8 @@ type Options =
     outTsx?: string[],
     ignoreFolders?: string[], // folders to completely ignore
     concurrency?: number,
-    forcePolling?: boolean
+    forcePolling?: boolean,
+    typeCheck?: boolean
 
 type CompileSuccess = {
     status: "built" | "skip",
@@ -68,7 +69,8 @@ defaultOpts: Options :=
     mapFiles: false,
     ignoreFolders: [],
     concurrency: Math.min(2, (os.cpus()?.length || 2)),
-    forcePolling: false
+    forcePolling: false,
+    typeCheck: false
 
 // ──────────────────────────────────────────────────────────────
 // Build-state layer – Pure functions operating on BuildContext  
@@ -87,7 +89,9 @@ export type BuildContext =
     // previous content hashes for incremental builds
     prevHashes: Record<string, { sig: string, outFile: string }>,
     // new hashes produced this run
-    newHashes: Record<string, { sig: string, outFile: string }>
+    newHashes: Record<string, { sig: string, outFile: string }>,
+    // cached Civet parseOptions loaded once per build run
+    parseOpts?: any
 
 // ---------------- helper utils (pure) ----------------
 
@@ -265,9 +269,8 @@ export compileSource := async (ctx: BuildContext, file: string): Promise<Compile
     content := await fs.readFile(file, "utf8")
 
     //  -- look for a civet config file (🐈.json, civetconfig.json, etc.) to include in signature and pass to compiler
-    configPath := await findCivetConfig(ctx.cwd)           // might be null if none exists
-    civetConfig := (configPath? ? await loadCivetConfig(configPath) : {}) || {}
-    parseOpts := civetConfig?.parseOptions
+    // Use cached parse options if available to avoid repeated disk lookups
+    parseOpts := ctx.parseOpts ?? null
 
     signature := makeSignature(content, { 
         tsx: isTsx, 
@@ -440,6 +443,11 @@ runBuild := async (cwd: string, opts: Options) =>
     sources := await glob("**/*.civet", ignore: ignorePatterns, cwd: cwd, caseSensitiveMatch: false)
 
     // Step 2: load previous state and create context
+    // Load Civet config once and cache its parseOptions for the whole build run
+    configPath := await findCivetConfig(cwd)
+    civetConfig := (configPath? ? await loadCivetConfig(configPath) : {}) || {}
+    cachedParseOpts := civetConfig?.parseOptions
+
     { prevGenerated, prevHashes } := await loadPrevState(cwd)
     ctx: BuildContext :=
         opts: opts,
@@ -448,7 +456,8 @@ runBuild := async (cwd: string, opts: Options) =>
         outFiles: new Set<string>(),
         prevGenerated: prevGenerated,
         prevHashes: prevHashes,
-        newHashes: {}
+        newHashes: {},
+        parseOpts: cachedParseOpts
 
     // Create the build engine which orchestrates compilation.
     engine := new BuildEngine(ctx)
@@ -506,6 +515,16 @@ runBuild := async (cwd: string, opts: Options) =>
 // UI layer – Responsible for colours, spinners, CLI exit codes   
 // ──────────────────────────────────────────────────────────────
 
+// ---------------- type-check helper ----------------
+runTscTypeCheck := (cwd: string): Promise<void> =>
+    new Promise (resolve, reject) =>
+        child := require('node:child_process').spawn('npx', ['--yes', 'tsc', '-p', cwd, '--noEmit', '--pretty', 'false'], {
+            cwd: cwd,
+            stdio: 'inherit'
+        })
+        child.on 'close', (code: number) =>
+            if code == 0 then resolve() else reject(new Error("tsc exit code " + code))
+
 // CLI command – build
 registerBuildCommand := =>
     program.command "build"
@@ -518,6 +537,16 @@ registerBuildCommand := =>
                 buildResult := await runBuild(cwd, opts)
                 engine = buildResult.engine
                 console.log c.green("\nCivetman finished building!")
+
+                // Optional post-build type-check
+                if opts.typeCheck
+                    console.log c.blue("Running TypeScript type-check…")
+                    try
+                        await runTscTypeCheck(cwd)
+                        console.log c.green("Type-check passed!\n")
+                    catch err
+                        console.error c.red("Type-check failed. See errors above.")
+                        void (process.exitCode = 1)
             catch e
                 // runBuild will have already logged details
                 void (process.exitCode = 1)
@@ -714,6 +743,7 @@ export default () =>
         .option("--concurrency <number>", "Max parallel compilations", (val) => parseInt(val, 10))
         .option("--force-polling", "Force chokidar polling even outside CI")
         .option("--ignore-folders <dir>", "Folder(s) to ignore (repeatable or comma-separated)", collectDirs, [] as string[])
+        .option("--type-check", "Run TypeScript type-check (tsc --noEmit) after build")
 
     registerBuildCommand()
     registerDevCommand()
