@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-civetman-fork",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "private": false,
   "description": "vite plugin for civetman (civet + watch compile)",
   "keywords": [
@@ -38,7 +38,6 @@
   },
   "dependencies": {
     "@danielx/civet": "^0.10.4",
-    "@jridgewell/gen-mapping": "^0.3.8",
     "chokidar": "^4.0.3",
     "commander": "^13.0.0",
     "fast-glob": "^3.2.12",
