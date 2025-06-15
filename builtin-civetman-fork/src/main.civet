@@ -186,6 +186,9 @@ collectDirs := (val: string, prev: string[]) =>
             .filter((s): s is string => !!s)
     )
 
+// Convert OS-specific paths (with backslashes) to POSIX style for glob libs/micromatch
+toPosix := (p: string): string => p.split(path.sep).join("/")
+
 // ---------------- manifest helpers (pure fs) ----------------
 manifestDir := (cwd: string) => join(cwd, ".civetman")
 manifestFile := (cwd: string) => join(manifestDir(cwd), "manifest.json")
@@ -438,7 +441,7 @@ runBuild := async (cwd: string, opts: Options) =>
     // Step 1: collect source files
     baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
     userIgnores := (opts.ignoreFolders ?? []).map((d) => path.join(d, "**"))
-    ignorePatterns := [...baseIgnores, ...userIgnores]
+    ignorePatterns := [...baseIgnores, ...userIgnores].map(toPosix)
 
     sources := await glob("**/*.civet", ignore: ignorePatterns, cwd: cwd, caseSensitiveMatch: false)
 
@@ -562,7 +565,7 @@ createWatcher := (cwd: string, opts: Options) ->
     // Build ignore patterns (same logic as build step)
     baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
     userIgnores := (opts.ignoreFolders || []).map((d: string) => path.join(d, "**"))
-    ignorePatterns := [...baseIgnores, ...userIgnores]
+    ignorePatterns := [...baseIgnores, ...userIgnores].map(toPosix)
 
     // Case-insensitive matcher using micromatch
     ignoreFn := (abs: string) =>
