@@ -9,13 +9,13 @@
 
 Tiny Vite plugin that **runs Civetman automatically** during both `vite dev` and `vite build`.
 
-It spawns the [`civetman`](https://www.npmjs.com/package/civetman) CLI (or the maintained fork that ships with this plugin) so you **never open a second terminal tab** just to compile `.civet` → `.ts/tsx`.
+It spawns the [`civetman-fork`](https://www.npmjs.com/package/civetman-fork) CLI (or the maintained fork that ships with this plugin) so you **never open a second terminal tab** just to compile `.civet` → `.ts/tsx`.
 
 ---
 
 ## Why use this plugin?
 
-• Zero-config – drop it in and it Just Works™.
+• Zero-config – drop it in and it Just Works.
 
 • Smart CLI resolution – prefers a project-local `civetman-fork`, falls back to original `civetman`, then to an embedded copy.
 
@@ -43,8 +43,8 @@ export default defineConfig({
   plugins: [
     civetman({
       tsx: true,                 // emit .tsx instead of .ts
-      outTsx: ['src'],           // custom output directory
-      inlineMap: 'fileurl',      // control source-map injection
+      outTsx: ['src'],           // or custom TSX output directory
+      inlineMap: 'none',         // if needed ontrol source-map injection
       concurrency: 4             // max parallel compiles
     })
   ]
@@ -67,7 +67,8 @@ export default defineConfig({
 | `outTsx` | `string \| string[]` | – | One or more folders that should always emit **.tsx**. |
 | `concurrency` | `number` | `CPU cores` | Parallel worker threads for compilation. `1` disables the worker pool. |
 | `forcePolling` | `boolean` | `false` | Force chokidar polling (useful on network drives / WSL). |
-
+| `onlyFolders` | `string \| string[]` | – | *Exclusive* folders to build/watch. If set, civetman ignores every path **outside** these folders. |
+| `typeCheck` | `boolean` | `false` | Run `tsc --noEmit` after a successful build and fail the CLI if TypeScript errors are found. |
 
 Any option maps 1-to-1 to a corresponding [`civetman` CLI flag](./builtin-civetman-fork/src/main.civet#L620-L650).
 
@@ -98,5 +99,3 @@ Same directory as the source by default (e.g. `foo.civet` → `foo.ts`).
 
 **Q: How do I disable hiding files in VS Code?**  
 Set `vscodeHide: false`.
-
-
