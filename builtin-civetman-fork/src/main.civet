@@ -44,21 +44,22 @@ type Options =
     outTs?: string[],      // folders
     outTsx?: string[],
     ignoreFolders?: string[], // folders to completely ignore
+    onlyFolders?: string[], // folders to exclusively build/watch
     concurrency?: number,
     forcePolling?: boolean,
     typeCheck?: boolean
 
-type CompileSuccess = {
+type CompileSuccess = 
     status: "built" | "skip",
     file: string,
     outFile: string,
     signature: string
-}
-type CompileError = {
+
+type CompileError = 
     status: "error",
     file: string,
     error: any
-}
+
 export type CompileResult = CompileSuccess | CompileError
 
 defaultOpts: Options :=
@@ -68,6 +69,7 @@ defaultOpts: Options :=
     inlineMap: "full",
     mapFiles: false,
     ignoreFolders: [],
+    onlyFolders: [],
     concurrency: Math.min(2, (os.cpus()?.length || 2)),
     forcePolling: false,
     typeCheck: false
@@ -178,6 +180,24 @@ resolveOutputType := (ctx: { cwd: string, opts: Options }, file: string): boolea
     if tsMatch  return false
     return ctx.opts.tsx
 
+// NEW: Helper to determine which paths/globs to use for build & watch
+getSourcePaths := (opts: Options, cwd: string) =>
+    hasOnly := opts.onlyFolders and opts.onlyFolders.length > 0
+    
+    // If --only-folders is used, target those folders specifically.
+    if hasOnly
+        // Globs for `fast-glob` need the `**/*.civet` suffix.
+        globPatterns := opts.onlyFolders!.map((p) => path.join(p, '**', '*.civet'))
+        // Paths for `chokidar` should just be the directories themselves.
+        watchPaths := opts.onlyFolders!
+        return { globPatterns, watchPaths }
+    
+    // Otherwise, default to searching the entire project directory.
+    return { 
+        globPatterns: ['**/*.civet'], 
+        watchPaths: [cwd] 
+    }
+
 collectDirs := (val: string, prev: string[]) =>
     // Accept comma-separated lists or repeatable flags.
     prev.concat(
@@ -255,6 +275,22 @@ export writeOutputAndGetResult := async (
 
     await safeWrite(expectedOut, codeOut)
     ctx.outFiles.add(expectedOut)
+
+    // --- Cleanup: remove bygone sibling (.ts vs .tsx) to prevent stale duplicates ---
+    siblingOut := file.replace(
+        '.civet',
+        isTsx ? '.ts' : '.tsx'
+    )
+    try
+        if siblingOut != expectedOut && await fs.pathExists(siblingOut)
+            await fs.unlink(siblingOut)
+            ctx.outFiles.delete(siblingOut)
+        if await fs.pathExists(siblingOut + '.map')
+            await fs.unlink(siblingOut + '.map')
+            ctx.outFiles.delete(siblingOut + '.map')
+    catch _
+        // best-effort, ignore errors
+
     logDebug("built", file)
     return { status: "built", file, outFile: expectedOut, signature }
 }
@@ -338,12 +374,17 @@ addVscodeExcludes := async (ctx: BuildContext) =>
     await fs.ensureDir(vscodeDir)
     await fs.ensureFile(settingsFile)
 
-    content := await fs.readFile(settingsFile, "utf8")
-    errors: ParseError[] := []
-    tree := jsoncParseTree(content, errors, { allowTrailingComma: true })
+    content .= await fs.readFile(settingsFile, "utf8")
+    errors: ParseError[] .= []
+    tree .= jsoncParseTree(content, errors, { allowTrailingComma: true })
     if !tree
-        // cannot parse settings, bail early
-        return
+        // File is empty or contains invalid JSONC – start from a clean state
+        content = "{}\n"
+        errors = []
+        tree = jsoncParseTree(content, errors, { allowTrailingComma: true })
+        if !tree
+            // Still cannot parse (extremely unlikely) – bail early to avoid corruption
+            return
 
     node := jsoncFindNodeAtLocation(tree, [configKey])
     existing := (node ? jsoncGetNodeValue(node) : {}) as Record<string, boolean>
@@ -439,11 +480,12 @@ runBuild := async (cwd: string, opts: Options) =>
     await cleanupTmpFiles(cwd)
 
     // Step 1: collect source files
+    { globPatterns } := getSourcePaths(opts, cwd)
     baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
     userIgnores := (opts.ignoreFolders ?? []).map((d) => path.join(d, "**"))
     ignorePatterns := [...baseIgnores, ...userIgnores].map(toPosix)
 
-    sources := await glob("**/*.civet", ignore: ignorePatterns, cwd: cwd, caseSensitiveMatch: false)
+    sources := await glob(globPatterns, ignore: ignorePatterns, cwd: cwd, caseSensitiveMatch: false)
 
     // Step 2: load previous state and create context
     // Load Civet config once and cache its parseOptions for the whole build run
@@ -567,12 +609,13 @@ createWatcher := (cwd: string, opts: Options) ->
     userIgnores := (opts.ignoreFolders || []).map((d: string) => path.join(d, "**"))
     ignorePatterns := [...baseIgnores, ...userIgnores].map(toPosix)
 
+    { watchPaths } := getSourcePaths(opts, cwd)
     // Case-insensitive matcher using micromatch
     ignoreFn := (abs: string) =>
         rel := path.relative(cwd, abs)
         micromatch.isMatch(rel, ignorePatterns, nocase: true)
 
-    chokidar.watch(cwd, {
+    chokidar.watch(watchPaths, {
         ignored: ignoreFn,
         persistent: true,
         ignoreInitial: true,
@@ -651,6 +694,9 @@ attachWatchHandlers := (watcher: any,
             else if result.status == 'error'
                 logDebug("[REBUILD_ONE] Error compiling", file, result.error)
                 console.error("Civetman error compiling", file, result.error)
+            
+            // Immediately refresh VS Code excludes to minimise flicker
+            await addVscodeExcludes(ctx)
             
             saveStateAndSync()
         })
@@ -746,6 +792,7 @@ export default () =>
         .option("--concurrency <number>", "Max parallel compilations", (val) => parseInt(val, 10))
         .option("--force-polling", "Force chokidar polling even outside CI")
         .option("--ignore-folders <dir>", "Folder(s) to ignore (repeatable or comma-separated)", collectDirs, [] as string[])
+        .option("--only-folders <dir>", "Folder(s) to exclusively build/watch (repeatable or comma-separated)", collectDirs, [] as string[])
         .option("--type-check", "Run TypeScript type-check (tsc --noEmit) after build")
 
     registerBuildCommand()
