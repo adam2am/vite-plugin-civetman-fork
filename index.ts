@@ -150,16 +150,29 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
     },
     async buildStart() {
       if (config.command == "build") {
-        const process = runCivetmanCli("build", getFlags());
-        await new Promise<void>((resolve, reject) => {
-          process.on("exit", (code ) => {
-            if (code == 0) {
-              resolve()
-            } else {
-              reject(new Error(`Civet Compile Error`))
+        // Launch Civet compiler for production build
+        const child = runCivetmanCli("build", getFlags());
+        try {
+          await new Promise<void>((resolve, reject) => {
+            child.on("error", reject);
+            child.on("exit", onResult);
+            // safety net: if child hangs, kill after 30 s so build doesn't stall
+            const timeout = setTimeout(() => {
+              console.error("[civetman-vite] child still running after 30s – killing");
+              child.kill("SIGTERM");
+            }, 30_000);
+
+            function onResult(code: number | null) {
+              clearTimeout(timeout);
+              if (code === 0) resolve();
+              else reject(new Error(`Civet build failed (exit ${code}). See logs above.`));
             }
           });
-        });
+          // success: continue Vite bundle
+        } catch (err: any) {
+          // propagate fatal error to Vite
+          this.error(err instanceof Error ? err : new Error(String(err)));
+        }
       }
     },
     async configureServer(server: ViteDevServer) {

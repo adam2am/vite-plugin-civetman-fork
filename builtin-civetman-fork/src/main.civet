@@ -141,6 +141,24 @@ export logDebug := (...args: any[]) =>
         return
     console.log("[civetman-debug]", ...args)
 
+// NEW: Helper to format compile errors for cleaner console output
+formatErrorForDisplay := (error: any): string =>
+    if error? and error.filename? and error.line? and error.column? and error.header?
+        // This is a structured Civet compile error
+        message .= `  ${c.gray(error.filename)}:${c.yellow(error.line)}:${c.yellow(error.column)} - ${c.red(error.header)}`
+        // The "Found:" part is the most useful piece of the verbose error body.
+        bodyStr := String(error.body or error.message or '')
+        // Use a multiline-aware regex to find "Found:" at the start of a line.
+        foundMatch := bodyStr.match(/^Found: (.*)/m)
+        if foundMatch and foundMatch[1]
+            message += ` (Found: ${c.yellow(foundMatch[1].trim())})`
+        return message
+    else if error instanceof Error
+        // Standard JS error
+        return `  ${c.red(error.message)}`
+    else
+        // Fallback for unknown errors
+        return `  ${c.red(String(error))}`
 
 export fileToOutFile := (file: string, tsx: boolean) =>
     file.replace(".civet", tsx ? ".tsx" : ".ts")
@@ -460,7 +478,7 @@ pruneStaleOutputs := async (ctx: BuildContext) =>
     return
 
 // ---------------- top-level build function (pure-ish) ----------------
-runBuild := async (cwd: string, opts: Options) =>
+runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
     // Step 0: scrub temp files from previous aborted runs
     await cleanupTmpFiles(cwd)
 
@@ -508,8 +526,10 @@ runBuild := async (cwd: string, opts: Options) =>
             skippedCount++
         else if res.status == 'error'
             hadError = true
-            spinner.fail(c.red(`Error compiling ${res.file}`))
-            console.error(res.error)
+            spinner.fail(c.red(`Error compiling ${res.file}`) + ` (stub written to ${c.yellow(res.outFile)})`)
+            console.error(formatErrorForDisplay(res.error))
+            // Store the hash for the error stub to avoid needless rebuilds.
+            ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
     }
 
     await engine.buildAll(onProgress)
@@ -531,7 +551,10 @@ runBuild := async (cwd: string, opts: Options) =>
     // Step 5: IDE / VCS hygiene
     await syncIDEConfigs(ctx)
 
-    if hadError
+    if hadError and throwOnError
+        // ensure worker threads are terminated so the process can exit cleanly
+        if engine?
+            await engine.pool.shutdown()
         throw new Error("Build failed with errors")
 
     // Make sure the returned context is up-to-date for watch mode
@@ -539,7 +562,7 @@ runBuild := async (cwd: string, opts: Options) =>
     ctx.prevHashes = { ...ctx.prevHashes, ...ctx.newHashes }
     ctx.newHashes = {}
 
-    return { ctx, engine }
+    return { ctx, engine, hadError }
 
 // ──────────────────────────────────────────────────────────────
 // UI layer – Responsible for colours, spinners, CLI exit codes   
@@ -564,7 +587,7 @@ registerBuildCommand := =>
             opts := { ...defaultOpts, ...program.opts<Options>() }
             engine .= null
             try
-                buildResult := await runBuild(cwd, opts)
+                buildResult := await runBuild(cwd, opts, true)
                 engine = buildResult.engine
                 console.log c.green("\nCivetman finished building!")
 
@@ -678,7 +701,9 @@ attachWatchHandlers := (watcher: any,
                 logDebug("[REBUILD_ONE] Skipped (up to date)", file)
             else if result.status == 'error'
                 logDebug("[REBUILD_ONE] Error compiling", file, result.error)
-                console.error("Civetman error compiling", file, result.error)
+                // Be less verbose in watch mode, but make it clear a stub was written.
+                console.error(c.red("  ✗ Error compiling " + c.cyan(result.file)) + ` (stub written to ${c.yellow(result.outFile!)})`)
+                console.error(formatErrorForDisplay(result.error))
             
             // Immediately refresh VS Code excludes to minimise flicker
             await addVscodeExcludes(ctx)
@@ -730,7 +755,7 @@ registerDevCommand := =>
         opts := { ...defaultOpts, ...program.opts<Options>() }
         try
             console.log c.blue("Civetman starts building in watch mode…\n")
-            { ctx, engine } := await runBuild(cwd, opts)
+            { ctx, engine } := await runBuild(cwd, opts, false)
             console.log c.green("Initial build complete! Watching for changes…\n")
             
             saveStateAndSync := debounce(async =>
