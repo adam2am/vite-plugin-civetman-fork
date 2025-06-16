@@ -15,9 +15,9 @@ ora from "ora"
 { compile } from "@danielx/civet"
 { parseTree as jsoncParseTree, findNodeAtLocation as jsoncFindNodeAtLocation, getNodeValue as jsoncGetNodeValue, modify as jsoncModify, applyEdits as jsoncApplyEdits } from "jsonc-parser"
 { createRequire } from "node:module"
-type { ParseError } from "jsonc-parser"
-{ BuildEngine } from "./engine.civet"
-{ loadHashesFromJSONL, writeHashesToJSONL } from "./jsonl-helpers.civet"
+import type { ParseError } from "jsonc-parser"
+import { BuildEngine } from "./engine.civet"
+import { loadHashesFromJSONL, writeHashesToJSONL, safeWrite, cleanupTmpFiles } from "./jsonl-helpers.civet"
 micromatch from "micromatch"
 { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
@@ -58,7 +58,9 @@ type CompileSuccess =
 type CompileError = 
     status: "error",
     file: string,
-    error: any
+    error: any,
+    outFile: string,
+    signature: string
 
 export type CompileResult = CompileSuccess | CompileError
 
@@ -139,23 +141,6 @@ export logDebug := (...args: any[]) =>
         return
     console.log("[civetman-debug]", ...args)
 
-// ------------------------------------------------------------------
-// Atomic write utility ensures we never leave partially-written files
-// ------------------------------------------------------------------
-export safeWrite := async (filePath: string, data: string | Buffer) =>
-    await fs.ensureDir(path.dirname(filePath))
-    tmp := filePath + "." + randomUUID() + ".civetmantmp"
-    await fs.writeFile(tmp, data)
-    await fs.rename(tmp, filePath)
-
-// Remove stray *.civetmantmp files that belong to our outputs
-cleanupTmpFiles := async (cwd: string) =>
-    tmpFiles := await glob("**/*.civetmantmp", cwd: cwd)
-    for tmp of tmpFiles
-        try
-            await fs.unlink(tmp)
-        catch _
-            continue
 
 export fileToOutFile := (file: string, tsx: boolean) =>
     file.replace(".civet", tsx ? ".tsx" : ".ts")

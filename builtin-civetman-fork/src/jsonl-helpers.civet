@@ -1,8 +1,28 @@
 // --------------------------------------------------------------------
-// jsonl-helpers.civet – Helpers for reading/writing JSON-Lines files
+// jsonl-helpers.civet – Helpers for reading/writing JSON-Lines files and other fs-utils
 // --------------------------------------------------------------------
-fs from "fs-extra"
-{ safeWrite } from "./main.civet"
+import fs from "fs-extra"
+import path from "node:path"
+import { randomUUID } from "node:crypto"
+import glob from "fast-glob"
+
+// ------------------------------------------------------------------
+// Atomic write utility ensures we never leave partially-written files
+// ------------------------------------------------------------------
+export safeWrite := async (filePath: string, data: string | Buffer) =>
+    await fs.ensureDir(path.dirname(filePath))
+    tmp := filePath + "." + randomUUID() + ".civetmantmp"
+    await fs.writeFile(tmp, data)
+    await fs.rename(tmp, filePath)
+
+// Remove stray *.civetmantmp files that belong to our outputs
+export cleanupTmpFiles := async (cwd: string) =>
+    tmpFiles := await glob("**/*.civetmantmp", { cwd: cwd })
+    for tmp of tmpFiles
+        try
+            await fs.unlink(tmp)
+        catch _
+            continue
 
 // A record in our hashes.jsonl file
 export type HashEntry = 

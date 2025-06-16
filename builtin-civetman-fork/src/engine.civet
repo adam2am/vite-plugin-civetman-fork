@@ -3,8 +3,9 @@
 // decides skip-vs-compile, delegates to pool, then calls writeOutputAndGetResult
 // --------------------------------------------------------------
 
-fs from "fs-extra"
-{ WorkerPool } from "./workerPool.civet"
+import fs from "fs-extra"
+import { WorkerPool } from "./workerPool.civet"
+import { safeWrite } from "./jsonl-helpers.civet"
 
 // Import helpers and types from the main module.
 {   writeOutputAndGetResult,
@@ -17,7 +18,6 @@ fs from "fs-extra"
 } from "./main.civet"
 
 { compile } from "@danielx/civet"
-{ findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 export class BuildEngine
     ctx: BuildContext
@@ -46,8 +46,8 @@ export class BuildEngine
         task := @runCompileTask(file).then (result: CompileResult) =>
             onProgress?.(result)
             return result
-        .catch (error: any) =>
-            result := { file, status: 'error', error: error } as CompileResult
+        .catch async (error: any) =>
+            result := await @writeErrorStub(file, error)
             onProgress?.(result)
             return result
 
@@ -146,4 +146,44 @@ export class BuildEngine
         @ctx.outFiles.delete(file)
         @ctx.outFiles.delete(file + ".map")
     
+    // NEW: Handle a compilation failure by writing a stub file.
+    async writeErrorStub(file: string, error: any): Promise<CompileResult> {
+        isTsx := resolveOutputType(@ctx, file)
+        expectedOut := fileToOutFile(file, isTsx)
+    
+        // The "content" of an error stub is the error message itself.
+        // This ensures that if the error changes, we generate a new stub.
+        errorContent := String(error?.message || error)
+        signature := makeSignature(errorContent, { tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles, parseOpts: @ctx.parseOpts ?? null })
+
+        // Skip if we've already generated this exact error stub.
+        prev := @ctx.prevHashes[file]
+        if prev and prev.sig == signature and prev.outFile == expectedOut and await fs.pathExists(expectedOut)
+            @ctx.outFiles.add(expectedOut)
+            logDebug("[COMPILE] Skipping (error stub signature match)", file)
+            return { status: "error", file, outFile: expectedOut, signature: signature, error }
+
+        logDebug("[COMPILE] Writing error stub", file)
+        let stubCode = `// CIVETMAN COMPILE ERROR - DO NOT EDIT\n`
+        stubCode += `// Source: ${file}\n`
+        stubCode += `//\n`
+        stubCode += `// ${String(error).replace(/\n/g, '\n// ')}\n\n`
+        stubCode += `throw new Error("Civet compilation failed for ${file}. See build logs for details.");\n`
+
+        // Write the stub to disk.
+        await safeWrite(expectedOut, stubCode)
+        @ctx.outFiles.add(expectedOut)
+
+        // --- Cleanup stale siblings ---
+        siblingOut := file.replace('.civet', isTsx ? '.ts' : '.tsx')
+        try
+            if siblingOut != expectedOut && await fs.pathExists(siblingOut)
+                await fs.unlink(siblingOut)
+            if await fs.pathExists(siblingOut + '.map')
+                await fs.unlink(siblingOut + '.map')
+        catch _
+            // best-effort
+        
+        return { status: "error", file, outFile: expectedOut, signature: signature, error }
+    }
 
