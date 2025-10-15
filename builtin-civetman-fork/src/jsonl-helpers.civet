@@ -1,10 +1,34 @@
 // --------------------------------------------------------------------
 // jsonl-helpers.civet – Helpers for reading/writing JSON-Lines files and other fs-utils
 // --------------------------------------------------------------------
-import fs from "fs-extra"
-import path from "node:path"
-import { randomUUID } from "node:crypto"
-import glob from "fast-glob"
+fs from "fs-extra"
+path from "node:path"
+{ randomUUID } from "node:crypto"
+glob from "fast-glob"
+
+// Import logDebug - assuming it's exported from main or a utils file
+// For simplicity, we'll assume it's available or we define a local one.
+// In a real scenario, you'd refactor logDebug into a shared utils file.
+const logDebug = (...args: unknown[]) => {
+    // Placeholder if not imported to avoid breaking helpers if used standalone.
+    // In your app, logDebug from main.civet is available.
+    console.log('[DEBUG]', ...args)
+}
+
+// Remove stray *.civetmantmp files that belong to our outputs
+export cleanupTmpFiles := async (cwd: string) =>
+    tmpFiles := await glob("**/*.civetmantmp", { cwd: cwd })
+    for tmp of tmpFiles
+        try
+            await fs.unlink(tmp)
+        catch (err: unknown)
+            logDebug("[CLEANUP] Failed to remove stray tmp file", tmp, err)
+
+// A record in our hashes.jsonl file
+export type HashEntry = 
+    file: string,
+    sig: string,
+    outFile: string
 
 // ------------------------------------------------------------------
 // Atomic write utility ensures we never leave partially-written files
@@ -14,21 +38,6 @@ export safeWrite := async (filePath: string, data: string | Buffer) =>
     tmp := filePath + "." + randomUUID() + ".civetmantmp"
     await fs.writeFile(tmp, data)
     await fs.rename(tmp, filePath)
-
-// Remove stray *.civetmantmp files that belong to our outputs
-export cleanupTmpFiles := async (cwd: string) =>
-    tmpFiles := await glob("**/*.civetmantmp", { cwd: cwd })
-    for tmp of tmpFiles
-        try
-            await fs.unlink(tmp)
-        catch _
-            continue
-
-// A record in our hashes.jsonl file
-export type HashEntry = 
-    file: string,
-    sig: string,
-    outFile: string
 
 
 // Reads a .jsonl file and reconstructs the latest state for each key.
@@ -47,12 +56,11 @@ export loadHashesFromJSONL :=
                 try
                     entry := JSON.parse(line) as HashEntry
                     map[entry.file] = { sig: entry.sig, outFile: entry.outFile }
-                catch _
-                    // ignore corrupted lines, let the last valid one win
-                    continue
+                catch (err: unknown)
+                    logDebug("[JSONL] Skipping corrupted line in hashes.jsonl", { line, err })
             return map
-        catch _
-            // On any error, return empty map to force a full rebuild.
+        catch (err: unknown)
+            logDebug("[JSONL] Failed to load hashes.jsonl, forcing full rebuild.", { filePath, err })
             return {}
 
 // Overwrites the hashes file with the latest, complete state.

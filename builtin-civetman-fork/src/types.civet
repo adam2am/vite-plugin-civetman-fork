@@ -1,0 +1,71 @@
+// --------------------------------------------------------------
+// types.civet – Centralized type definitions for type-safe APIs
+// --------------------------------------------------------------
+
+// Standard Source Map format (based on source-map spec)
+export type RawSourceMap =
+    version: number
+    sources: string[]
+    names: string[]
+    sourceRoot?: string
+    sourcesContent?: string[]
+    mappings: string
+    file: string
+
+// Civet compiler's SourceMap object with json() method
+export type CivetSourceMap =
+    json: (sourceFile: string, outFile: string) => string
+
+// Civet compiler result (what @danielx/civet returns)
+export type CivetCompileResult =
+    code: string
+    sourceMap?: CivetSourceMap
+
+// Payload sent TO a compile worker
+export type CompileWorkerPayload =
+    file: string
+    content: string
+    isTsx: boolean
+    wantMap: boolean
+    parseOpts?: Record<string, unknown> | null
+
+// Result received FROM a compile worker (discriminated union)
+export type CompileWorkerResult =
+    | { ok: true, code: string, mapJson: string | null }
+    | { ok: false, error: string }
+
+// Build result for a single file (discriminated union)
+export type CompileSuccess =
+    status: "built" | "skip"
+    file: string
+    outFile: string
+    signature: string
+
+export type CompileError =
+    status: "error"
+    file: string
+    error: Error
+    outFile: string
+    signature: string
+
+export type CompileResult = CompileSuccess | CompileError
+
+// State updates that need to be applied after compilation
+export type CompileStateUpdate =
+    outFiles: string[]  // files to add to outFiles set
+    newHashes: Record<string, { sig: string, outFile: string }>  // new hash entries
+    filesToDelete: string[]  // files to remove from outFiles set
+    hashesToDelete?: string[] // files to remove from hash manifest
+
+// Civet parseOptions type (from @danielx/civet/config)
+export type CivetParseOptions = Record<string, unknown>
+
+// Structured Civet compile error (from @danielx/civet)
+export type CivetStructuredError =
+    filename?: string
+    line?: number
+    column?: number
+    header?: string
+    body?: string
+    message?: string
+

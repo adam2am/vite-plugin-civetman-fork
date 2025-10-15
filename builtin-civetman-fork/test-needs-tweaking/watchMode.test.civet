@@ -12,8 +12,8 @@ __dirname  := path.dirname(__filename)
 
 // Accumulate watcher output – makes it trivial to check for substrings later.
 outputBuffer .= ""
-appendOutput := (chunk: any) ->
-    outputBuffer += stripAnsi(chunk.toString())
+appendOutput := (chunk: unknown) ->
+    outputBuffer += stripAnsi(String(chunk))
 
 // Utility: wait until a specific text appears in watcher output (or fail after timeout)
 waitFor := (text: string, timeout = 10000) ->

@@ -4,28 +4,36 @@
 import { parentPort } from "node:worker_threads"
 import { compile } from "@danielx/civet"
 import fs from "node:fs/promises"
+import type { CompileWorkerPayload, CivetCompileResult } from "../types.civet"
+import type { CompileWorkerResult } from "../types.civet"
 
 // This script must be run as a worker.
-unless parentPort
+const pp = parentPort
+if !pp
     throw new Error("Must be run as a worker thread.")
 
 // Listen for a message from the main thread.
-parentPort!.on "message", async (msg) =>
+pp.on "message", async (msg: CompileWorkerPayload) =>
     { file, content: initial, isTsx, wantMap, parseOpts } := msg
     try
         // Use provided content when available to avoid an extra disk read.
         content := if initial? then initial else await fs.readFile(file, "utf8")
         // Perform the compilation.
         compileOptions := { filename: file, sourceMap: wantMap, ...(parseOpts ? { parseOptions: parseOpts } : {}) }
-        { code, sourceMap } := await compile(content, compileOptions)
+        rawResult := await compile(content, compileOptions)
+        result: CivetCompileResult := typeof rawResult === 'string' 
+            ? { code: rawResult } 
+            : rawResult as CivetCompileResult
+        { code, sourceMap } := result
         
         // The outFile path is needed to correctly generate the source map.
         outFile := file.replace('.civet', isTsx ? '.tsx' : '.ts')
-        mapJson := if wantMap then sourceMap.json(file, outFile) else null
-        plainMap := mapJson
+        mapJson := if wantMap && sourceMap then sourceMap.json(file, outFile) else null
 
         // Send the successful result back to the main thread.
-        parentPort!.postMessage({ ok: true, code, mapJson: plainMap })
+        successResult: CompileWorkerResult := { ok: true, code, mapJson }
+        pp.postMessage(successResult)
     catch error
         // If compilation fails, send an error message back.
-        parentPort!.postMessage({ ok: false, error: String(error) }) 
+        errorResult: CompileWorkerResult := { ok: false, error: String(error) }
+        pp.postMessage(errorResult) 

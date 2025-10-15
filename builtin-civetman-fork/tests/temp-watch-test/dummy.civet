@@ -1,2 +1,2 @@
-a: number := 2
+_a: number := 2
 export {}

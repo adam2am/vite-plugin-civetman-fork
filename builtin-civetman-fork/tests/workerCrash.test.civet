@@ -38,7 +38,8 @@ describe "WorkerPool – crash recovery", () =>
         pool := new WorkerPool(1)
 
         // First compile should succeed
-        res1 := await pool.exec({ file: file1, content: 'a: number := 1\nexport {}', isTsx: false })
+        res1 := await pool.exec({ file: file1, content: 'a: number := 1\nexport {}', isTsx: false, wantMap: false })
+        assert(res1.ok, 'First compile failed')
         assert(res1.code.includes('const a:'), 'First compile failed')
 
         // Simulate a worker crash by force-terminating the thread
@@ -53,7 +54,8 @@ describe "WorkerPool – crash recovery", () =>
         assert.strictEqual(pool.idle.length, 0, 'Crashed worker was not removed')
 
         // The next compile should spawn a fresh worker and succeed
-        res2 := await pool.exec({ file: file2, content: 'b: number := 2\nexport {}', isTsx: false })
+        res2 := await pool.exec({ file: file2, content: 'b: number := 2\nexport {}', isTsx: false, wantMap: false })
+        assert(res2.ok, 'Second compile failed after crash')
         assert(res2.code.includes('const b:'), 'Second compile failed after crash')
 
         // Clean up: terminate any remaining workers so Mocha can exit cleanly

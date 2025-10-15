@@ -5,6 +5,13 @@ import { Worker } from "node:worker_threads"
 import os from "node:os"
 import fs from "fs-extra"
 import { fileURLToPath } from "node:url"
+import type { CompileWorkerPayload, CompileWorkerResult } from "./types.civet"
+
+const logDebug = (...args: unknown[]) => {
+    // Placeholder if not imported to avoid breaking helpers if used standalone.
+    // In your app, logDebug from main.civet is available.
+    console.log('[DEBUG]', ...args)
+}
 
 // Resolve worker script path in an ESM-safe way
 const workerScriptPath = fileURLToPath(new URL('./workers/compileWorker.cjs', import.meta.url))
@@ -33,7 +40,12 @@ export class WorkerPool
     acquire(): Promise<Worker>
         return new Promise (resolve, reject) => 
             if (@idle.length > 0)
-                resolve(@idle.pop()!)
+                const worker = @idle.pop()
+                if (worker) {
+                    resolve(worker)
+                } else {
+                    reject(new Error("Worker pool state corrupted: idle array was empty despite length check"))
+                }
             else if (@totalWorkers < @size)
                 worker := new Worker(workerScriptPath)
                 @totalWorkers++
@@ -45,31 +57,37 @@ export class WorkerPool
                     @idle = @idle.filter((w) => w !== worker)
                     // If a worker exits with an error, fail a pending request.
                     if code != 0 and @pending.length > 0
-                        @pending.shift()!.reject(new Error(`Worker exited with error code: ${code}`))
+                        const pendingRequest = @pending.shift()
+                        if (pendingRequest) {
+                            pendingRequest.reject(new Error(`Worker exited with error code: ${code}`))
+                        }
                 resolve(worker)
             else
                 @pending.push({ resolve, reject })
 
     release(worker: Worker)
         if (@pending.length > 0)
-            // Give the worker to the first pending resolver
-            @pending.shift()!.resolve(worker)
+            const pendingRequest = @pending.shift()
+            if (pendingRequest) {
+                // Give the worker to the first pending resolver
+                pendingRequest.resolve(worker)
+            }
         else
             @idle.push(worker)
 
     // Run a task: compile given data in worker, returns promise
-    async exec(payload: any): Promise<any>
+    async exec(payload: CompileWorkerPayload): Promise<CompileWorkerResult>
         worker := await @acquire()
         try
-            return await new Promise (resolve, reject) => 
-                messageHandler := (msg: any) =>
+            return await new Promise<CompileWorkerResult> (resolve, reject) => 
+                messageHandler := (msg: CompileWorkerResult) =>
                     cleanup()
                     if msg.ok
                         resolve(msg)
                     else
                         reject(new Error(msg.error))
 
-                errorHandler := (err: any) =>
+                errorHandler := (err: Error) =>
                     cleanup()
                     reject(err)
 
@@ -97,8 +115,8 @@ export class WorkerPool
         for worker of @idle
             try
                 await worker.terminate()
-            catch _
-                continue
+            catch (err: unknown)
+                logDebug("[POOL] Failed to terminate worker during shutdown.", { threadId: worker.threadId, err })
         @idle = []
         for p of @pending
             p.reject(new Error("Pool is shutting down"))

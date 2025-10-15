@@ -5,14 +5,14 @@ const civetPlugin = () => ({
   name: 'vitest-plugin-civet',
   async transform(code: string, id: string) {
     if (id.endsWith('.civet')) {
-      const { code: jsCode, sourceMap } = await compile(code, { 
+      const { code: jsCode } = await compile(code, { 
         filename: id, 
         sourceMap: true 
-      }) as { code: string, sourceMap: any }
+      })
       
       return {
         code: jsCode,
-        map: sourceMap?.json()
+        map: undefined
       }
     }
   }

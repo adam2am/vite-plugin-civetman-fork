@@ -9,8 +9,9 @@ glob from "fast-glob"
 { join } from "node:path"
 path from "node:path"
 os from "node:os"
-{ createHash, randomUUID } from "node:crypto"
+{ createHash } from "node:crypto"
 chokidar from "chokidar"
+import type { FSWatcher } from "chokidar"
 ora from "ora"
 { compile } from "@danielx/civet"
 { parseTree as jsoncParseTree, findNodeAtLocation as jsoncFindNodeAtLocation, getNodeValue as jsoncGetNodeValue, modify as jsoncModify, applyEdits as jsoncApplyEdits } from "jsonc-parser"
@@ -18,6 +19,7 @@ ora from "ora"
 import type { ParseError } from "jsonc-parser"
 import { BuildEngine } from "./engine.civet"
 import { loadHashesFromJSONL, writeHashesToJSONL, safeWrite, cleanupTmpFiles } from "./jsonl-helpers.civet"
+import type { CompileResult, CivetParseOptions, CivetCompileResult, CivetStructuredError, CompileStateUpdate } from "./types.civet"
 micromatch from "micromatch"
 { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
@@ -49,20 +51,9 @@ type Options =
     forcePolling?: boolean,
     typeCheck?: boolean
 
-type CompileSuccess = 
-    status: "built" | "skip",
-    file: string,
-    outFile: string,
-    signature: string
-
-type CompileError = 
-    status: "error",
-    file: string,
-    error: any,
-    outFile: string,
-    signature: string
-
-export type CompileResult = CompileSuccess | CompileError
+// CompileResult is now imported from types.civet
+// Keeping these exports for backwards compatibility
+export type { CompileResult } from "./types.civet"
 
 defaultOpts: Options :=
     tsx: false,
@@ -95,12 +86,35 @@ export type BuildContext =
     // new hashes produced this run
     newHashes: Record<string, { sig: string, outFile: string }>,
     // cached Civet parseOptions loaded once per build run
-    parseOpts?: any
+    parseOpts?: CivetParseOptions
 
 // ---------------- helper utils (pure) ----------------
 
 computeHash := (input: string): string =>
     createHash("sha256").update(input).digest("hex")
+
+// Apply state updates to BuildContext (pure function)
+applyStateUpdate := (ctx: BuildContext, update: CompileStateUpdate): BuildContext =>
+    // Create new context with updated state
+    newCtx: BuildContext := {
+        ...ctx,
+        outFiles: new Set([...ctx.outFiles, ...update.outFiles]),
+        newHashes: { ...ctx.newHashes, ...update.newHashes }
+    }
+    
+    // Remove deleted files
+    for file of update.filesToDelete
+        newCtx.outFiles.delete(file)
+    
+    // Remove hash entries if specified
+    if update.hashesToDelete
+        for file of update.hashesToDelete
+            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Safe: Record cleanup
+            delete newCtx.prevHashes[file]
+            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Safe: Record cleanup
+            delete newCtx.newHashes[file]
+    
+    return newCtx
 
 // Computes the deterministic build signature shared by all build paths.
 // This centralises the formula so changes happen in one place.
@@ -108,9 +122,9 @@ export makeSignature := (
     content: string,
     opts: { 
         tsx: boolean, 
-        inlineMap: string | boolean | any, 
+        inlineMap: string | boolean, 
         mapFiles: boolean, 
-        parseOpts?: any }
+        parseOpts?: CivetParseOptions }
 ) : string =>
     computeHash(
         content +
@@ -134,7 +148,7 @@ debugFilters := if debugEnv? and debugEnv != "*" and debugEnv.toLowerCase() != "
 else
     null
 
-export logDebug := (...args: any[]) =>
+export logDebug := (...args: unknown[]) =>
     if !outputDebug return
     tag := typeof args[0] == "string" ? args[0].toUpperCase() : ""
     if debugFilters? and ![...debugFilters].some((f) => tag.includes(f))
@@ -142,12 +156,13 @@ export logDebug := (...args: any[]) =>
     console.log("[civetman-debug]", ...args)
 
 // NEW: Helper to format compile errors for cleaner console output
-formatErrorForDisplay := (error: any): string =>
-    if error? and error.filename? and error.line? and error.column? and error.header?
+formatErrorForDisplay := (error: unknown): string =>
+    err := error as CivetStructuredError
+    if error? and err.filename? and err.line? and err.column? and err.header?
         // This is a structured Civet compile error
-        message .= `  ${c.gray(error.filename)}:${c.yellow(error.line)}:${c.yellow(error.column)} - ${c.red(error.header)}`
+        message .= `  ${c.gray(err.filename)}:${c.yellow(err.line)}:${c.yellow(err.column)} - ${c.red(err.header)}`
         // The "Found:" part is the most useful piece of the verbose error body.
-        bodyStr := String(error.body or error.message or '')
+        bodyStr := String(err.body or err.message or '')
         // Use a multiline-aware regex to find "Found:" at the start of a line.
         foundMatch := bodyStr.match(/^Found: (.*)/m)
         if foundMatch and foundMatch[1]
@@ -190,9 +205,9 @@ getSourcePaths := (opts: Options, cwd: string) =>
     // If --only-folders is used, target those folders specifically.
     if hasOnly
         // Globs for `fast-glob` need the `**/*.civet` suffix.
-        globPatterns := opts.onlyFolders!.map((p) => path.join(p, '**', '*.civet'))
+        globPatterns := (opts.onlyFolders ?? []).map((p) => path.join(p, '**', '*.civet'))
         // Paths for `chokidar` should just be the directories themselves.
-        watchPaths := opts.onlyFolders!
+        watchPaths := (opts.onlyFolders ?? [])
         return { globPatterns, watchPaths }
     
     // Otherwise, default to searching the entire project directory.
@@ -217,16 +232,17 @@ manifestDir := (cwd: string) => join(cwd, ".civetman")
 manifestFile := (cwd: string) => join(manifestDir(cwd), "manifest.json")
 hashManifestFile := (cwd: string) => join(manifestDir(cwd), "hashes.jsonl")
 
-loadJSON := async (file: string, fallback: any) =>
+loadJSON := async <T>(file: string, fallback: T): Promise<T> =>
     if await fs.pathExists(file)
         try
             JSON.parse(await fs.readFile(file, "utf8"))
-        catch
+        catch (err: unknown)
+            logDebug("[JSON] Failed to parse JSON file, using fallback.", { file, err })
             fallback
     else
         fallback
 
-saveJSON := async (file: string, data: any) =>
+saveJSON := async (file: string, data: unknown) =>
     await fs.ensureDir(path.dirname(file))
     await safeWrite(file, JSON.stringify(data, null, 2))
 
@@ -255,26 +271,24 @@ export writeOutputAndGetResult := async (
     file: string,
     isTsx: boolean,
     code: string,
-    mapJson: any,
+    mapJson: string | null,
     signature: string
-): Promise<CompileResult> => {
-    const expectedOut = fileToOutFile(file, isTsx)
-    let codeOut = code
-    const mapFile = expectedOut + ".map"
+): Promise<CompileResult> =>
+    expectedOut := fileToOutFile(file, isTsx)
+    codeOut .= code
+    mapFile := expectedOut + ".map"
 
-    if (ctx.opts.inlineMap == "full" && mapJson) {
-        const base64Map = Buffer.from(JSON.stringify(mapJson)).toString("base64")
+    if ctx.opts.inlineMap is "full" and mapJson
+        base64Map := Buffer.from(JSON.stringify(mapJson)).toString("base64")
         codeOut += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
-    }
 
-    if (ctx.opts.mapFiles && mapJson) {
+    if ctx.opts.mapFiles and mapJson
         await safeWrite(mapFile, JSON.stringify(mapJson))
         ctx.outFiles.add(mapFile)
 
-        if (ctx.opts.inlineMap == "fileurl") {
+        if ctx.opts.inlineMap is "fileurl"
             codeOut += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"
-        }
-    }
+    
 
     await safeWrite(expectedOut, codeOut)
     ctx.outFiles.add(expectedOut)
@@ -291,12 +305,12 @@ export writeOutputAndGetResult := async (
         if await fs.pathExists(siblingOut + '.map')
             await fs.unlink(siblingOut + '.map')
             ctx.outFiles.delete(siblingOut + '.map')
-    catch _
-        // best-effort, ignore errors
+    catch (err: unknown)
+        logDebug("[WRITE] Best-effort cleanup of sibling file failed.", { siblingOut, err })
 
     logDebug("built", file)
     return { status: "built", file, outFile: expectedOut, signature }
-}
+
 
 // ---------------- compilation (pure, worker-thread ready) ----------------
 // This function is now only used for IN-PROCESS compilation.
@@ -312,7 +326,7 @@ export compileSource := async (ctx: BuildContext, file: string): Promise<Compile
 
     //  -- look for a civet config file (🐈.json, civetconfig.json, etc.) to include in signature and pass to compiler
     // Use cached parse options if available to avoid repeated disk lookups
-    parseOpts := ctx.parseOpts ?? null
+    parseOpts := ctx.parseOpts
 
     signature := makeSignature(content, { 
         tsx: isTsx, 
@@ -330,32 +344,32 @@ export compileSource := async (ctx: BuildContext, file: string): Promise<Compile
                 ctx.outFiles.add(expectedOut + ".map")
             logDebug("[COMPILE] Skipping (signature match)", file)
             return { status: "skip", file, outFile: expectedOut, signature: signature }
-    catch _
-        logDebug("[COMPILE] Error during sig check", file)
+    catch (err: unknown)
+        logDebug("[COMPILE] Error during sig check, compiling anyway.", { file, err })
         // fall through to compile on any error
     
     // actual compile
-    try 
-        logDebug("[COMPILE] Starting actual in-process compilation", file)
-        needMap := ctx.opts.inlineMap != "none" || ctx.opts.mapFiles
+    logDebug("[COMPILE] Starting actual in-process compilation", file)
+    needMap := ctx.opts.inlineMap != "none" || ctx.opts.mapFiles
 
-        compileOptions := {
-            filename: file,
-            sourceMap: needMap,
-            ...(parseOpts ? { parseOptions: parseOpts } : {})
-        }
+    compileOptions := {
+        filename: file,
+        sourceMap: needMap,
+        ...(parseOpts ? { parseOptions: parseOpts } : {})
+    }
 
-        compileRes := await compile(content, compileOptions) as unknown as { code: string, sourceMap?: any }
-        logDebug("[COMPILE] In-process compilation successful", file)
+    // compile() returns string | { code, sourceMap } - handle both cases
+    rawResult := await compile(content, compileOptions)
+    compileRes: CivetCompileResult := typeof rawResult === 'string' 
+        ? { code: rawResult } 
+        : rawResult as CivetCompileResult
+    logDebug("[COMPILE] In-process compilation successful", file)
 
-        mapJson := if needMap && compileRes.sourceMap?
-            compileRes.sourceMap.json(file, expectedOut)
-        else
-            null
-        return await writeOutputAndGetResult(ctx, file, isTsx, compileRes.code, mapJson, signature)
-    catch e
-        // propagate error – UI layer decides what to log/exit
-        throw e
+    mapJson := if needMap && compileRes.sourceMap?
+        compileRes.sourceMap.json(file, expectedOut)
+    else
+        null
+    return await writeOutputAndGetResult(ctx, file, isTsx, compileRes.code, mapJson, signature)
 
 
 // ---------------- side-effect helpers (IDE, gitignore) ----------------
@@ -472,8 +486,8 @@ pruneStaleOutputs := async (ctx: BuildContext) =>
         try
             if await fs.pathExists(join(ctx.cwd, file))
                 await fs.unlink(join(ctx.cwd, file))
-        catch _
-            // best effort – ignore deletion errors
+        catch (err: unknown)
+            logDebug("[PRUNE] Best-effort pruning of stale file failed.", { file, err })
             continue
     return
 
@@ -497,7 +511,7 @@ runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
     cachedParseOpts := civetConfig?.parseOptions
 
     { prevGenerated, prevHashes } := await loadPrevState(cwd)
-    ctx: BuildContext :=
+    let ctx: BuildContext =
         opts: opts,
         cwd: cwd,
         sources: sources,
@@ -516,23 +530,27 @@ runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
     builtCount .= 0
     skippedCount .= 0
 
-    onProgress := (res: any) => {
+    // Use the new pure approach - get results and state updates
+    { results, stateUpdates } := await engine.buildAllWithStateUpdates()
+    
+    // Process results and apply state updates
+    for (let i = 0; i < results.length; i++) {
+        res := results[i]
+        stateUpdate := stateUpdates[i]
+        
         if res.status == 'built'
             spinner.succeed(c.cyan(res.file) + " -> " + c.green(res.outFile))
-            ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
             builtCount++
         else if res.status == 'skip'
-            ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
             skippedCount++
         else if res.status == 'error'
             hadError = true
             spinner.fail(c.red(`Error compiling ${res.file}`) + ` (stub written to ${c.yellow(res.outFile)})`)
             console.error(formatErrorForDisplay(res.error))
-            // Store the hash for the error stub to avoid needless rebuilds.
-            ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
+        
+        // Apply state update to context
+        ctx = applyStateUpdate(ctx, stateUpdate)
     }
-
-    await engine.buildAll(onProgress)
     
     finalMessage .= `Built ${builtCount} file(s)`
     if skippedCount > 0
@@ -597,16 +615,17 @@ registerBuildCommand := =>
                     try
                         await runTscTypeCheck(cwd)
                         console.log c.green("Type-check passed!\n")
-                    catch err
+                    catch (err: unknown)
                         console.error c.red("Type-check failed. See errors above.")
+                        logDebug("[TYPECHECK] Type-check error details:", err)
                         void (process.exitCode = 1)
-            catch e
+            catch (err: unknown)
                 // runBuild will have already logged details
+                logDebug("[BUILD] Build error details:", err)
                 void (process.exitCode = 1)
             finally
                 if engine?
                     await engine.pool.shutdown()
-                return
 
 // ---------------- watch mode helpers ----------------
 createWatcher := (cwd: string, opts: Options) ->
@@ -639,12 +658,17 @@ createWatcher := (cwd: string, opts: Options) ->
 // ---------------- global watcher registry to avoid duplicate SIGINT logs ----------------
 
 // Define a type for our custom global properties to avoid `as any`.
+interface WatchBundle {
+    watcher: FSWatcher
+    ctx: BuildContext
+}
+
 interface CivetmanGlobal extends NodeJS.Global {
-    __civetman_watch_bundles?: Set<any>
+    __civetman_watch_bundles?: Set<WatchBundle>
     __civetman_sigint_handler_registered?: boolean
 }
 
-activeWatchBundles := (global as CivetmanGlobal).__civetman_watch_bundles ?? new Set<any>()
+activeWatchBundles := (global as CivetmanGlobal).__civetman_watch_bundles ?? new Set<WatchBundle>()
 (global as CivetmanGlobal).__civetman_watch_bundles = activeWatchBundles
 
 if !(global as CivetmanGlobal).__civetman_sigint_handler_registered
@@ -658,58 +682,66 @@ if !(global as CivetmanGlobal).__civetman_sigint_handler_registered
                 ctxObj.prevHashes = { ...ctxObj.prevHashes, ...ctxObj.newHashes }
                 ctxObj.newHashes = {}
                 await saveNewState(ctxObj)
-            catch _
+            catch (err: unknown)
+                logDebug("[SIGINT] Error during graceful shutdown.", err)
                 continue
         // Print shutdown message only once across all processes using a tmp-file lock
         onceFile := path.join(os.tmpdir(), "civetman_watch_stop_once")
         shouldLog .= true
         try
             fs.writeFileSync(onceFile, process.pid.toString(), { flag: 'wx' })
-        catch _
+        catch (err: unknown)
+            logDebug("[SIGINT] Failed to write stop signal file:", err)
             shouldLog = false
         if shouldLog
             console.log("\nCivetman watch stopped (CLI).")
         process.exit()
 
 // Helper to add all watch-event listeners to a chokidar watcher instance
-attachWatchHandlers := (watcher: any, 
+attachWatchHandlers := (watcher: FSWatcher, 
                         ctx: BuildContext, 
                         cwd: string, 
                         saveStateAndSync: () => void, 
                         engine: BuildEngine) ->
     timers: Map<string, NodeJS.Timeout> := new Map()
     scheduleRebuild := (file: string) =>
-        if timers.has(file)
-            clearTimeout(timers.get(file)!)
+        const existingTimer = timers.get(file)
+        if existingTimer
+            clearTimeout(existingTimer)
         timers.set(file, setTimeout(() =>
             timers.delete(file)
             compileNow(file)
         , 100))
 
-    compileNow := (file: string) =>
+    compileNow := async (file: string) =>
         // Ensure we read the latest file contents; drop any cached entry
         if engine.contentCache? and engine.contentCache.delete?
             engine.contentCache.delete(file)
-        engine.build(file, (result: CompileResult) => {
+        
+        try
+            { result, stateUpdate } := await engine.buildWithStateUpdate(file)
+            
             if result.status == 'built'
-                ctx.prevHashes[file] = ctx.newHashes[file] = { sig: result.signature!, outFile: result.outFile! }
-                logDebug("[REBUILD_ONE] Built", file, "->", result.outFile!)
-                console.log c.green('  ✓ ' + c.cyan(result.file) + " -> " + c.green(result.outFile!))
+                logDebug("[REBUILD_ONE] Built", file, "->", result.outFile)
+                console.log c.green('  ✓ ' + c.cyan(result.file) + " -> " + c.green(result.outFile))
             else if result.status == 'skip'
-                // update hashes on skip to prevent re-runs
-                ctx.prevHashes[file] = ctx.newHashes[file] = { sig: result.signature!, outFile: result.outFile! }
                 logDebug("[REBUILD_ONE] Skipped (up to date)", file)
             else if result.status == 'error'
                 logDebug("[REBUILD_ONE] Error compiling", file, result.error)
                 // Be less verbose in watch mode, but make it clear a stub was written.
-                console.error(c.red("  ✗ Error compiling " + c.cyan(result.file)) + ` (stub written to ${c.yellow(result.outFile!)})`)
+                console.error(c.red("  ✗ Error compiling " + c.cyan(result.file)) + ` (stub written to ${c.yellow(result.outFile)})`)
                 console.error(formatErrorForDisplay(result.error))
+            
+            // Apply state update to context
+            ctx = applyStateUpdate(ctx, stateUpdate)
             
             // Immediately refresh VS Code excludes to minimise flicker
             await addVscodeExcludes(ctx)
             
             saveStateAndSync()
-        })
+        catch error
+            logDebug("[REBUILD_ONE] Unexpected error", file, error)
+            console.error(c.red("  ✗ Unexpected error compiling " + c.cyan(file)), error)
 
     watcher.on 'ready', ->
         logDebug("[WATCHER] Initial scan complete and ready for changes")
@@ -742,8 +774,22 @@ attachWatchHandlers := (watcher: any,
     watcher.on "unlink", async (abs: string) =>
         unless abs.endsWith('.civet') return
         file := path.relative(cwd, abs) 
+        
         logDebug("[WATCHER_UNLINK] File removed", file)
-        await engine.remove(file)
+        
+        // Engine describes the changes, main loop applies them.
+        update := engine.createRemoveUpdate(file)
+        ctx.sources = ctx.sources.filter((sourceFile: string) => sourceFile !== file)
+
+        // Perform file deletions
+        for fileToDelete of update.filesToDelete
+            try 
+                if await fs.pathExists(fileToDelete) then await fs.unlink(fileToDelete)
+            catch (err: unknown) 
+                logDebug("[WATCHER_UNLINK] Failed to delete stale file.", { fileToDelete, err })
+
+        // Apply the state changes
+        ctx = applyStateUpdate(ctx, update)
         saveStateAndSync()
 
 // ---------------- watch mode ----------------
@@ -811,10 +857,10 @@ export default () =>
     program.parse(process.argv)
 
 // Debounce helper – immediate execution on first call (leading) and one batched tail call.
-debounce := (func: Function, timeout = 1000) ->
+debounce := <T extends unknown[]>(func: (...args: T) => void, timeout = 1000) ->
     timer: NodeJS.Timeout | null .= null
-    pendingArgs: any[] | null .= null
-    (...args: any[]) ->
+    pendingArgs: T | null .= null
+    (...args: T) ->
         logDebug("[DEBOUNCE] Debounce invoked", args)
         if !timer?
             // Leading edge – fire immediately

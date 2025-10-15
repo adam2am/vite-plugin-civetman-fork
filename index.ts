@@ -104,7 +104,7 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
   }
 
   // Define flag generators keyed by option name
-  const flagGenerators: Record<keyof CivetmanOptions, (value: any) => string[]> = {
+  const flagGenerators: Record<keyof CivetmanOptions, (value: unknown) => string[]> = {
     tsx:       (v: boolean) => v ? ['--tsx'] : [],
     gitIgnore: (v: boolean) => v === false ? ['--no-git-ignore'] : [],
     vscodeHide:(v: boolean) => v === false ? ['--no-vscode-hide'] : [],
@@ -132,7 +132,7 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
       const dirs = Array.isArray(value) ? value : [value];
       return dirs.flatMap(dir => ['--only-folders', dir]);
     },
-  } as any;
+  } as Record<keyof CivetmanOptions, (value: unknown) => string[]>;
   // Specify order of flags
   const flagOrder: (keyof typeof flagGenerators)[] = [
     'tsx', 'gitIgnore', 'vscodeHide', 'inlineMap', 'mapFiles', 'outTs', 'outTsx', 'ignoreFolders', 'onlyFolders', 'concurrency', 'forcePolling'
@@ -169,7 +169,7 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
             }
           });
           // success: continue Vite bundle
-        } catch (err: any) {
+        } catch (err: unknown) {
           // propagate fatal error to Vite
           this.error(err instanceof Error ? err : new Error(String(err)));
         }

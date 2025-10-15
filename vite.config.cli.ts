@@ -1,11 +1,11 @@
 import { defineConfig, type PluginOption } from "vite"
-import civetVitePlugin from "@danielx/civet/vite"
+import civetmanPlugin from "./index.ts"
 
 export default defineConfig({
 	build: {
 		lib: {
 			entry: {
-				'index': './index.ts',
+				'index': './builtin-civetman-fork/index.ts',
 			},
 			formats: ["es"],
 			fileName: () => 'index.js'
@@ -24,6 +24,14 @@ export default defineConfig({
 			],
 		},
 	},
-	plugins: [civetVitePlugin({
+	plugins: [civetmanPlugin({
+		tsx: false,
+		gitIgnore: true,
+		vscodeHide: true,
+		inlineMap: 'inline',
+		mapFiles: false,
+		outTs: 'builtin-civetman-fork/src',
+		ignoreFolders: ['node_modules', 'dist', 'tests'],
+		concurrency: 4
 	}) as PluginOption],
 }) 
