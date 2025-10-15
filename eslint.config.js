@@ -42,6 +42,8 @@ export default [
       'builtin-civetman-fork/dist/**',
       'builtin-civetman-fork/node_modules/**',
       'builtin-civetman-fork/cli/dist/**',
+      'builtin-civetman-fork/src/**/*.ts', // Ignore generated .ts shadow files
+      '**/*.civetmantmp', // Ignore temporary files
     ],
   },
 ]

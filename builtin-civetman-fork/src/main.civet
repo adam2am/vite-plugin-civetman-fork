@@ -714,6 +714,9 @@ attachWatchHandlers := (watcher: FSWatcher,
         , 100))
 
     compileNow := async (file: string) =>
+        // Clean up any stray temp files before compiling
+        await cleanupTmpFiles(cwd)
+        
         // Ensure we read the latest file contents; drop any cached entry
         if engine.contentCache? and engine.contentCache.delete?
             engine.contentCache.delete(file)

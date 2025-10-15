@@ -1,6 +1,7 @@
 // --------------------------------------------------------------
 // engine.civet – shared BuildEngine for build & watch pipelines 
 // decides skip-vs-compile, delegates to pool, then calls writeOutputAndGetResult
+// TEST: Watch mode is working!
 // --------------------------------------------------------------
 
 fs from "fs-extra"

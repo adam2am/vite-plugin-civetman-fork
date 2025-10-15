@@ -1,34 +1,16 @@
 import { defineConfig, type PluginOption } from "vite"
-import civetmanPlugin from "./index.ts"
+import { civetman } from "./index.js"
 
 export default defineConfig({
-	build: {
-		lib: {
-			entry: {
-				'index': './builtin-civetman-fork/index.ts',
-			},
-			formats: ["es"],
-			fileName: () => 'index.js'
-		},
-		minify: false,
-		rollupOptions: {
-			external: [
-				"picocolors",
-				"commander",
-				"fs-extra",
-				"fast-glob",
-				"@danielx/civet",
-				"chokidar",
-				"ora",
-				/node:.*/gi,
-			],
-		},
+	server: {
+		port: 3000,
+		open: false
 	},
-	plugins: [civetmanPlugin({
+	plugins: [civetman({
 		tsx: false,
 		gitIgnore: true,
 		vscodeHide: true,
-		inlineMap: 'inline',
+		inlineMap: 'full',
 		mapFiles: false,
 		outTs: 'builtin-civetman-fork/src',
 		ignoreFolders: ['node_modules', 'dist', 'tests'],
