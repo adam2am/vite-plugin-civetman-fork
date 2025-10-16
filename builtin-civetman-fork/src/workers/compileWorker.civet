@@ -8,7 +8,7 @@ import type { CompileWorkerPayload, CivetCompileResult } from "../types.civet"
 import type { CompileWorkerResult } from "../types.civet"
 
 // This script must be run as a worker.
-const pp = parentPort
+pp := parentPort
 if !pp
     throw new Error("Must be run as a worker thread.")
 

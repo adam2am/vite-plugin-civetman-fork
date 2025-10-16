@@ -30,7 +30,7 @@ waitFor := (text: string, timeout = 10000) ->
         check()
 
 describe "Civetman Watch – basic rebuild", () =>
-    let watcher: ChildProcess | null = null
+    watcher: ChildProcess | null .= null
     testDir := path.join(__dirname, "temp-watch-test")
     fixtureDir := path.join(__dirname, "fixture")
     civetPath := path.join(testDir, "dummy.civet")

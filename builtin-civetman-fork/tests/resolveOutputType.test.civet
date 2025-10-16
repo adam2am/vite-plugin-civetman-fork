@@ -3,50 +3,50 @@ import path from 'node:path';
 import { resolveOutputType, defaultOpts } from '../src/main.civet';
 
 describe('resolveOutputType', () => {
-  const cwd = '/app';
+  cwd := '/app';
 
   it('should return tsx for files under outTsx directories', () => {
-    const ctx = {
+    ctx := {
       cwd,
       opts: { ...defaultOpts, outTsx: ['src/components'], outTs: ['src/lib'] },
     };
-    const file = path.join(cwd, 'src/components/Button.civet');
+    file := path.join(cwd, 'src/components/Button.civet');
     assert.strictEqual(resolveOutputType(ctx, file), true);
   });
 
   it('should return ts for files under outTs directories', () => {
-    const ctx = {
+    ctx := {
       cwd,
       opts: { ...defaultOpts, outTsx: ['src/components'], outTs: ['src/lib'] },
     };
-    const file = path.join(cwd, 'src/lib/utils.civet');
+    file := path.join(cwd, 'src/lib/utils.civet');
     assert.strictEqual(resolveOutputType(ctx, file), false);
   });
 
   it('should prefer the longer path if both match', () => {
-    const ctx = {
+    ctx := {
       cwd,
       opts: { ...defaultOpts, outTsx: ['src/components'], outTs: ['src'] },
     };
-    const file = path.join(cwd, 'src/components/Card.civet');
+    file := path.join(cwd, 'src/components/Card.civet');
     assert.strictEqual(resolveOutputType(ctx, file), true);
   });
 
   it('should fall back to the global tsx option', () => {
-    const ctx = {
+    ctx := {
       cwd,
       opts: { ...defaultOpts, tsx: true },
     };
-    const file = path.join(cwd, 'src/other/test.civet');
+    file := path.join(cwd, 'src/other/test.civet');
     assert.strictEqual(resolveOutputType(ctx, file), true);
   });
 
   it('should handle root-level configuration', () => {
-    const ctx = {
+    ctx := {
         cwd,
         opts: { ...defaultOpts, outTsx: ['.'] }
     };
-    const file = path.join(cwd, 'App.civet');
+    file := path.join(cwd, 'App.civet');
     assert.strictEqual(resolveOutputType(ctx, file), true);
   });
 }); 

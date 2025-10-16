@@ -15,7 +15,7 @@ export interface ImportMatch {
  */
 function isRealKeyword(content: string, index: number, keyword: string): boolean {
   if (index > 0 && /\w/.test(content[index - 1])) return false;
-  const nextChar = content[index + keyword.length];
+  nextChar := content[index + keyword.length];
   return !nextChar || !/\w/.test(nextChar);
 }
 
@@ -41,16 +41,16 @@ export function stripQuotes(text: string): string {
  * - export type { x } from './file.civet' (type re-exports)
  */
 export function findAllImports(content: string): ImportMatch[] {
-  const results: ImportMatch[] = [];
-  let i = 0;
+  results: ImportMatch[] := [];
+  i .= 0;
 
   while (i < content.length) {
     // Find next 'import' or 'export' keyword
-    const importIdx = content.indexOf('import', i);
-    const exportIdx = content.indexOf('export', i);
+    importIdx := content.indexOf('import', i);
+    exportIdx := content.indexOf('export', i);
     
-    let keywordIdx = -1;
-    let keyword = '';
+    keywordIdx .= -1;
+    keyword .= '';
     
     if (importIdx !== -1 && exportIdx !== -1) {
       // Both found, take the earlier one
@@ -89,14 +89,14 @@ export function findAllImports(content: string): ImportMatch[] {
       while (i < content.length && /\s/.test(content[i])) i++;
     }
 
-    let inString: '"' | "'" | null = null;
-    let braceLevel = 0;
-    let foundFrom = false;
-    let potentialSideEffect = true;
+    inString: '"' | "'" | null .= null;
+    braceLevel .= 0;
+    foundFrom .= false;
+    potentialSideEffect .= true;
 
     // Scan forward from the keyword
     while (i < content.length) {
-      const char = content[i];
+      char := content[i];
 
       // Skip whitespace
       if (/\s/.test(char)) {
@@ -130,8 +130,8 @@ export function findAllImports(content: string): ImportMatch[] {
 
       // Check for `from` keyword only outside of braces
       if (braceLevel === 0 && content.substring(i, i + 4) === 'from') {
-        const prevChar = content[i - 1];
-        const nextChar = content[i + 4];
+        prevChar := content[i - 1];
+        nextChar := content[i + 4];
         if (prevChar && /\s/.test(prevChar) && nextChar && /\s/.test(nextChar)) {
           foundFrom = true;
           potentialSideEffect = false;
@@ -143,15 +143,15 @@ export function findAllImports(content: string): ImportMatch[] {
       // Found the specifier
       if (char === "'" || char === '"') {
         inString = char;
-        const specOffset = i;
-        const specStart = i + 1;
-        let specEnd = specStart;
+        specOffset := i;
+        specStart := i + 1;
+        specEnd .= specStart;
         while (specEnd < content.length && content[specEnd] !== inString) specEnd++;
-        const spec = content.substring(specStart, specEnd);
-        const specLength = (specEnd - specStart) + 2;
+        spec := content.substring(specStart, specEnd);
+        specLength := (specEnd - specStart) + 2;
         i = specEnd + 1;
         
-        const type = foundFrom ? 'from' : (potentialSideEffect ? 'side-effect' : 'from');
+        type := foundFrom ? 'from' : (potentialSideEffect ? 'side-effect' : 'from');
         results.push({ spec, offset: specOffset, length: specLength, type });
         break; // Move to next keyword match
       }
@@ -185,25 +185,25 @@ function replaceAt(str: string, offset: number, length: number, replacement: str
  * Removes .civet extensions from import and export statements while preserving quote styles.
  */
 export function rewriteCivetImports(code: string): string {
-  const imports = findAllImports(code);
-  const civetImports = imports.filter((m) => m.spec.endsWith('.civet'));
+  imports := findAllImports(code);
+  civetImports := imports.filter((m) => m.spec.endsWith('.civet'));
   
   if (civetImports.length === 0) {
     return code; // No .civet imports/exports to rewrite
   }
   
   // Replace in reverse order to preserve offsets
-  let result = code;
+  result .= code;
   for (const match of civetImports.reverse()) {
     // Get the original text to preserve quote characters
-    const originalText = code.substring(match.offset, match.offset + match.length);
-    const quoteChar = originalText.startsWith('"') || originalText.startsWith("'") ? originalText[0] : undefined;
+    originalText := code.substring(match.offset, match.offset + match.length);
+    quoteChar := originalText.startsWith('"') || originalText.startsWith("'") ? originalText[0] : undefined;
     
     // Remove .civet extension from the spec
-    const newSpec = match.spec.replace(/\.civet$/, '');
+    newSpec := match.spec.replace(/\.civet$/, '');
     
     // Rebuild with proper quotes
-    const newText = quoteChar ? quoteChar + newSpec + quoteChar : newSpec;
+    newText := quoteChar ? quoteChar + newSpec + quoteChar : newSpec;
     result = replaceAt(result, match.offset, match.length, newText);
   }
   

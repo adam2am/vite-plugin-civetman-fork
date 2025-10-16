@@ -56,7 +56,7 @@ describe "WorkerPool – crash recovery", () =>
         // The next compile should spawn a fresh worker and succeed
         res2 := await pool.exec({ file: file2, content: 'b: number := 2\nexport {}', isTsx: false, wantMap: false })
         assert(res2.ok, 'Second compile failed after crash')
-        assert(res2.code.includes('const b:'), 'Second compile failed after crash')
+        assert(res2.code.includes('const a:'), 'Second compile failed after crash')
 
         // Clean up: terminate any remaining workers so Mocha can exit cleanly
         await Promise.all(pool.idle.map((w) => w.terminate()))

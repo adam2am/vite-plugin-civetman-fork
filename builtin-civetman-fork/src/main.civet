@@ -418,7 +418,7 @@ addVscodeExcludes := async (ctx: BuildContext) =>
 
     // Extract previously managed files for cleanup logic
     rootManagedNode := jsoncFindNodeAtLocation(tree, [managedKey])
-    let previouslyManaged: string[]
+    previouslyManaged: string[] .= []
     if rootManagedNode
         previouslyManaged = (jsoncGetNodeValue(rootManagedNode) as string[]) || []
     else
@@ -451,7 +451,7 @@ addVscodeExcludes := async (ctx: BuildContext) =>
     managedMetadata := if ctx.opts.vscodeHide then files else undefined
 
     edits := jsoncModify(content, [configKey], newExclude, { formattingOptions: { insertSpaces: true, tabSize: 2 } })
-    let newContent = jsoncApplyEdits(content, edits)
+    newContent .= jsoncApplyEdits(content, edits)
     
     // Add/remove managed metadata AT THE ROOT
     metadataEdits := jsoncModify(newContent, [managedKey], managedMetadata, { formattingOptions: { insertSpaces: true, tabSize: 2 } })
@@ -514,7 +514,7 @@ addGitignoreEntries := async (ctx: BuildContext) =>
         await safeWrite(gitignorePath, newContent)
     return
 
-// ---------------- helper to prune stale outputs ----------------
+    // ---------------- helper to prune stale outputs ----------------
 pruneStaleOutputs := async (ctx: BuildContext) =>
     stale := [...ctx.prevGenerated].filter((f) => !ctx.outFiles.has(f))
     for file of stale
@@ -546,7 +546,7 @@ runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
     cachedParseOpts := civetConfig?.parseOptions
 
     { prevGenerated, prevHashes } := await loadPrevState(cwd)
-    let ctx: BuildContext =
+    ctx: BuildContext .=
         opts: opts,
         cwd: cwd,
         sources: sources,
@@ -569,7 +569,7 @@ runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
     { results, stateUpdates } := await engine.buildAllWithStateUpdates()
     
     // Process results and apply state updates
-    for (let i = 0; i < results.length; i++) {
+    for (i .= 0; i < results.length; i++) {
         res := results[i]
         stateUpdate := stateUpdates[i]
         
@@ -740,7 +740,7 @@ attachWatchHandlers := (watcher: FSWatcher,
                         engine: BuildEngine) ->
     timers: Map<string, NodeJS.Timeout> := new Map()
     scheduleRebuild := (file: string) =>
-        const existingTimer = timers.get(file)
+        existingTimer := timers.get(file)
         if existingTimer
             clearTimeout(existingTimer)
         timers.set(file, setTimeout(() =>

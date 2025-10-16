@@ -11,8 +11,8 @@ __filename := fileURLToPath(import.meta.url)
 __dirname  := path.dirname(__filename)
 
 // --- Test Setup ---
-const tempDir = path.resolve(__dirname, 'temp-invalidation-test')
-const cliPath = path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
+tempDir := path.resolve(__dirname, 'temp-invalidation-test')
+cliPath := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
 
 runBuild := (cwd: string) ->
     result := spawnSync('node', [cliPath, 'build'], { cwd, encoding: 'utf8' })

@@ -143,7 +143,7 @@ export class BuildEngine
                     throw new Error(workerResult.error)
             catch workerErr
                 logDebug("[COMPILE] Worker failed, falling back", workerErr)
-                compileOpts := {
+                compileOpts .= {
                     filename: file,
                     sourceMap: wantMap,
                     ...(parseOpts ? { parseOptions: parseOpts } : {})
@@ -157,7 +157,7 @@ export class BuildEngine
                     mapJson = compileResult.sourceMap.json(file, expectedOut)
         else
             logDebug("[COMPILE] Compiling in-process", file)
-            compileOpts := {
+            compileOpts .= {
                 filename: file,
                 sourceMap: wantMap,
                 ...(parseOpts ? { parseOptions: parseOpts } : {})
