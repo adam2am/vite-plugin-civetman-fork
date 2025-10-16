@@ -142,3 +142,5 @@ console.log(foo)`
       input := 'import { foo } from "./civet-folder.civet/module.ts"'
       result := rewriteCivetImports(input)
       expect(result).toBe('import { foo } from "./civet-folder.civet/module.ts"')
+    return
+  return
