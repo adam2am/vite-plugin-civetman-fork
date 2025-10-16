@@ -12,5 +12,11 @@
     "strict": true,
     "skipLibCheck": true
   },
-  "include": ["index.ts", "builtin-civetman-fork/src/**/*.ts", "builtin-civetman-fork/src/**/*.civet"]
+  "include": [
+    "index.ts",
+    "builtin-civetman-fork/src/**/*.ts",
+    "builtin-civetman-fork/src/**/*.civet",
+    "builtin-civetman-fork/tests/**/*.civet",
+    "builtin-civetman-fork/test-needs-tweaking/**/*.civet"
+  ]
 }

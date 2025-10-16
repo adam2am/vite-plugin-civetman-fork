@@ -24,7 +24,6 @@ import type { CompileResult, CivetParseOptions, CivetCompileResult, CivetStructu
 micromatch from "micromatch"
 { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
-oks := 123
 
 // ------------------------------------------------------------------
 // Global build fingerprint – any change forces full rebuilds

@@ -1,17 +1,17 @@
-import assert from 'node:assert'
+import { describe, it, expect } from 'vitest'
 import { computeHash } from '../src/main.civet'
 
 describe 'computeHash', ->
   it 'should compute the correct SHA256 hash for a given string', ->
     input := 'hello world'
     expectedHash := 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9'
-    assert.strictEqual computeHash(input), expectedHash
+    expect(computeHash(input)).toBe(expectedHash)
 
   it 'should produce different hashes for different inputs', ->
     input1 := 'hello world'
     input2 := 'hello there'
-    assert.notStrictEqual computeHash(input1), computeHash(input2)
+    expect(computeHash(input1)).not.toBe(computeHash(input2))
 
   it 'should produce the same hash for the same input', ->
     input := 'some random string'
-    assert.strictEqual computeHash(input), computeHash(input)
+    expect(computeHash(input)).toBe(computeHash(input))

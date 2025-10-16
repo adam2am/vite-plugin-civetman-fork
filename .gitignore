@@ -190,11 +190,6 @@ builtin-civetman-fork/tests/importRewriterIntegration.test.ts
 builtin-civetman-fork/tests/resolveOutputType.test.ts
 builtin-civetman-fork/tests/temp-watch-test/dummy.ts
 builtin-civetman-fork/tests/workerCrash.test.ts
-lsp-example-source/extension.ts
-lsp-example-source/import2.ts
-test-file.ts
-test-manual.ts
-test-quotes.ts
 # civetman:end - End of civetman managed block.
 
 .civetman/

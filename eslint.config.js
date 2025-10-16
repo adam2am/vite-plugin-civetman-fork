@@ -33,6 +33,7 @@ export default [
       '@typescript-eslint/no-require-imports': 'off', // Allow require() in .cjs files
       '@typescript-eslint/ban-ts-comment': 'warn',
       '@typescript-eslint/no-dynamic-delete': 'warn',
+      'no-control-regex': 'off', // Allow ANSI escape sequences in test files
     },
   },
   {
@@ -40,9 +41,14 @@ export default [
       'node_modules/**',
       'dist/**',
       'builtin-civetman-fork/dist/**',
-      'builtin-civetman-fork/node_modules/**',
       'builtin-civetman-fork/cli/dist/**',
+      'builtin-civetman-fork/node_modules/**',
       'builtin-civetman-fork/src/**/*.ts', // Ignore generated .ts shadow files
+      'builtin-civetman-fork/src/**/*.js', // Ignore generated .js files
+      'builtin-civetman-fork/**/*.test.ts', // Ignore generated test .ts files
+      'builtin-civetman-fork/**/*.test.js', // Ignore generated test .js files
+      'builtin-civetman-fork/test-needs-tweaking/**/*.ts', // Ignore generated test .ts files
+      'builtin-civetman-fork/test-needs-tweaking/**/*.js', // Ignore generated test .js files
       '**/*.civetmantmp', // Ignore temporary files
     ],
   },

@@ -1,8 +1,7 @@
-import { describe, it } from 'mocha'
+import { describe, it, expect } from 'vitest'
 import fs from 'fs-extra'
 import os from 'node:os'
 import path from 'node:path'
-import assert from 'node:assert'
 import { WorkerPool } from '../src/workerPool.civet'
 import { fileURLToPath } from 'node:url'
 
@@ -27,8 +26,6 @@ ensureWorkerScript := async () ->
 
 describe "WorkerPool – crash recovery", () =>
     it "should still compile after a worker exits abnormally", async ->
-        @timeout 15000
-    
         tmpDir := await fs.mkdtemp(path.join(os.tmpdir(), 'civetman-crash-'))
 
         // Prepare two small civet sources
@@ -39,8 +36,9 @@ describe "WorkerPool – crash recovery", () =>
 
         // First compile should succeed
         res1 := await pool.exec({ file: file1, content: 'a: number := 1\nexport {}', isTsx: false, wantMap: false })
-        assert(res1.ok, 'First compile failed')
-        assert(res1.code.includes('const a:'), 'First compile failed')
+        expect(res1.ok).toBe(true)
+        if res1.ok
+            expect(res1.code.includes('const a:')).toBe(true)
 
         // Simulate a worker crash by force-terminating the thread
         if pool.idle.length == 0
@@ -51,15 +49,17 @@ describe "WorkerPool – crash recovery", () =>
         pool.idle = pool.idle.filter((w) => w !== crashed)
 
         // Verify pool has no idle workers left
-        assert.strictEqual(pool.idle.length, 0, 'Crashed worker was not removed')
+        expect(pool.idle.length).toBe(0)
 
         // The next compile should spawn a fresh worker and succeed
         res2 := await pool.exec({ file: file2, content: 'b: number := 2\nexport {}', isTsx: false, wantMap: false })
-        assert(res2.ok, 'Second compile failed after crash')
-        assert(res2.code.includes('const a:'), 'Second compile failed after crash')
+        expect(res2.ok).toBe(true)
+        if res2.ok
+            expect(res2.code.includes('const b:')).toBe(true)
 
-        // Clean up: terminate any remaining workers so Mocha can exit cleanly
+        // Clean up: terminate any remaining workers so test can exit cleanly
         await Promise.all(pool.idle.map((w) => w.terminate()))
+    , 15000 // timeout
 
 // Run the check immediately so it finishes before tests execute
 await ensureWorkerScript() 

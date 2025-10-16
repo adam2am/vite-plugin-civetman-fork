@@ -1,21 +1,34 @@
-import assert from 'node:assert'
+import { describe, it, beforeEach, afterEach, expect } from 'vitest'
 import fs from 'fs-extra'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { execSync } from 'child_process'
+
+// __dirname polyfill for ESM
+__filename := fileURLToPath(import.meta.url)
+__dirname := path.dirname(__filename)
 
 describe 'Import Rewriter Integration Tests', ->
   testDir := path.join(__dirname, 'temp-import-test')
   
-  beforeEach ->
+  beforeEach async ->
     // Clean up test directory
     if await fs.pathExists(testDir)
       await fs.remove(testDir)
     await fs.ensureDir(testDir)
 
-  afterEach ->
-    // Clean up test directory
+  afterEach async ->
+    // Clean up test directory with retries for Windows
     if await fs.pathExists(testDir)
-      await fs.remove(testDir)
+      for attempt in [1, 2, 3]
+        try
+          await fs.remove(testDir)
+          break
+        catch error
+          if attempt === 3
+            console.warn('Failed to clean up test directory after 3 attempts:', error)
+          else
+            await new Promise((resolve) => setTimeout(resolve, 100))
 
   it 'should rewrite .civet imports in compiled output', ->
     // Create test files
@@ -33,22 +46,22 @@ export const test = "hello"`)
         stdio: 'pipe'
       })
     catch error
-      console.error('Build failed:', (error as any).stdout?.toString())
+      console.error('Build failed:', (error as Error).message)
       throw error
 
     // Check the compiled output
     compiledFile := path.join(testDir, 'test.ts')
-    assert.ok(await fs.pathExists(compiledFile), 'Compiled file should exist')
+    expect(await fs.pathExists(compiledFile)).toBe(true)
 
     content := await fs.readFile(compiledFile, 'utf8')
     
     // Check that .civet extensions were removed
-    assert.ok(content.includes('from "./bar"'), 'Should rewrite .civet imports')
-    assert.ok(content.includes('from "./types"'), 'Should rewrite type imports')
-    assert.ok(!content.includes('.civet'), 'Should not contain .civet extensions')
+    expect(content.includes('from "./bar"')).toBe(true)
+    expect(content.includes('from "./types"')).toBe(true)
+    expect(!content.includes('.civet')).toBe(true)
     
     // Check that external imports are preserved
-    assert.ok(content.includes('from "some-package"'), 'Should preserve external imports')
+    expect(content.includes('from "some-package"')).toBe(true)
 
   it 'should preserve quote styles in imports', ->
     // Create test file with different quote styles
@@ -67,9 +80,9 @@ import type { Type } from "./types.civet"`)
     content := await fs.readFile(path.join(testDir, 'quotes.ts'), 'utf8')
     
     // Check that quotes are preserved
-    assert.ok(content.includes('from "./bar"'), 'Should preserve double quotes')
-    assert.ok(content.includes("from './qux'"), 'Should preserve single quotes')
-    assert.ok(content.includes('from "./types"'), 'Should preserve quotes in type imports')
+    expect(content.includes('from "./bar"')).toBe(true)
+    expect(content.includes("from './qux'")).toBe(true)
+    expect(content.includes('from "./types"')).toBe(true)
 
   it 'should handle complex multi-line imports', ->
     // Create test file with complex imports
@@ -95,9 +108,9 @@ import type {
     content := await fs.readFile(path.join(testDir, 'complex.ts'), 'utf8')
     
     // Check that multi-line imports are handled correctly
-    assert.ok(content.includes('from "./module"'), 'Should handle multi-line imports')
-    assert.ok(content.includes('from "./types"'), 'Should handle multi-line type imports')
-    assert.ok(!content.includes('.civet'), 'Should not contain .civet extensions')
+    expect(content.includes('from "./module"')).toBe(true)
+    expect(content.includes('from "./types"')).toBe(true)
+    expect(!content.includes('.civet')).toBe(true)
 
   it 'should not affect non-.civet imports', ->
     // Create test file with mixed imports
@@ -117,10 +130,10 @@ import type { Type } from "./types.civet"`)
     content := await fs.readFile(path.join(testDir, 'mixed.ts'), 'utf8')
     
     // Check that only .civet imports were modified
-    assert.ok(content.includes('from "./bar"'), 'Should rewrite .civet imports')
-    assert.ok(content.includes('from "./qux.ts"'), 'Should preserve .ts imports')
-    assert.ok(content.includes('from "some-package"'), 'Should preserve external imports')
-    assert.ok(content.includes('from "./types"'), 'Should rewrite type .civet imports')
+    expect(content.includes('from "./bar"')).toBe(true)
+    expect(content.includes('from "./qux.ts"')).toBe(true)
+    expect(content.includes('from "some-package"')).toBe(true)
+    expect(content.includes('from "./types"')).toBe(true)
 
   it 'should handle side-effect imports', ->
     // Create test file with side-effect imports
@@ -139,6 +152,6 @@ import "external-package"`)
     content := await fs.readFile(path.join(testDir, 'side-effect.ts'), 'utf8')
     
     // Check that side-effect imports are handled
-    assert.ok(content.includes('from "./styles"'), 'Should handle side-effect .civet imports')
-    assert.ok(content.includes('from "./utils"'), 'Should handle side-effect .civet imports')
-    assert.ok(content.includes('from "external-package"'), 'Should preserve external side-effect imports')
+    expect(content.includes('import "./styles"')).toBe(true)
+    expect(content.includes('import "./utils"')).toBe(true)
+    expect(content.includes('import "external-package"')).toBe(true)

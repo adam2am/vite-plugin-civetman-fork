@@ -1,4 +1,4 @@
-import assert from 'node:assert';
+import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { resolveOutputType, defaultOpts } from '../src/main.civet';
 
@@ -11,7 +11,7 @@ describe('resolveOutputType', () => {
       opts: { ...defaultOpts, outTsx: ['src/components'], outTs: ['src/lib'] },
     };
     file := path.join(cwd, 'src/components/Button.civet');
-    assert.strictEqual(resolveOutputType(ctx, file), true);
+    expect(resolveOutputType(ctx, file)).toBe(true);
   });
 
   it('should return ts for files under outTs directories', () => {
@@ -20,7 +20,7 @@ describe('resolveOutputType', () => {
       opts: { ...defaultOpts, outTsx: ['src/components'], outTs: ['src/lib'] },
     };
     file := path.join(cwd, 'src/lib/utils.civet');
-    assert.strictEqual(resolveOutputType(ctx, file), false);
+    expect(resolveOutputType(ctx, file)).toBe(false);
   });
 
   it('should prefer the longer path if both match', () => {
@@ -29,7 +29,7 @@ describe('resolveOutputType', () => {
       opts: { ...defaultOpts, outTsx: ['src/components'], outTs: ['src'] },
     };
     file := path.join(cwd, 'src/components/Card.civet');
-    assert.strictEqual(resolveOutputType(ctx, file), true);
+    expect(resolveOutputType(ctx, file)).toBe(true);
   });
 
   it('should fall back to the global tsx option', () => {
@@ -38,7 +38,7 @@ describe('resolveOutputType', () => {
       opts: { ...defaultOpts, tsx: true },
     };
     file := path.join(cwd, 'src/other/test.civet');
-    assert.strictEqual(resolveOutputType(ctx, file), true);
+    expect(resolveOutputType(ctx, file)).toBe(true);
   });
 
   it('should handle root-level configuration', () => {
@@ -47,6 +47,6 @@ describe('resolveOutputType', () => {
         opts: { ...defaultOpts, outTsx: ['.'] }
     };
     file := path.join(cwd, 'App.civet');
-    assert.strictEqual(resolveOutputType(ctx, file), true);
+    expect(resolveOutputType(ctx, file)).toBe(true);
   });
 }); 

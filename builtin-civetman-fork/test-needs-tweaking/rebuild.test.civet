@@ -1,10 +1,10 @@
-import { describe, it, before, after } from 'mocha'
+import { describe, it, beforeAll, afterAll, expect } from 'vitest'
 import fs from 'fs-extra'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import assert from 'node:assert'
-import stripAnsi from 'strip-ansi'
 import { fileURLToPath } from 'node:url'
+
+stripAnsi := (str: string) => str.replace(/\u001b\[[0-9;]*m/g, '')
 
 // __dirname polyfill for ESM test files
 __filename := fileURLToPath(import.meta.url)
@@ -22,7 +22,7 @@ runBuild := (cwd: string) ->
     stripAnsi(result.stdout + result.stderr)
 
 describe 'Cache Invalidation on Config Change', ->
-    before async ->
+    beforeAll async ->
         await fs.remove(tempDir)  // start clean
         await fs.ensureDir(tempDir)
         // initial project state
@@ -32,21 +32,21 @@ describe 'Cache Invalidation on Config Change', ->
                 js: false
         )
 
-    after async ->
+    afterAll async ->
         await fs.remove(tempDir)
 
     it 'performs an initial build', async ->
         output1 := runBuild(tempDir)
-        assert.ok(output1.includes('Built 1'), 'Initial build did not report 1 built file')
+        expect(output1.includes('Built 1')).toBe(true)
 
         outFile := path.join(tempDir, 'a.ts')
-        assert.ok(await fs.pathExists(outFile), 'Output TS file missing')
+        expect(await fs.pathExists(outFile)).toBe(true)
         content := await fs.readFile(outFile, 'utf8')
-        assert.ok(!content.includes('// @ts-nocheck'), 'Unexpected ts-nocheck in initial build')
+        expect(!content.includes('// @ts-nocheck')).toBe(true)
 
     it 'skips compilation on a second run with no changes', async ->
         output2 := runBuild(tempDir)
-        assert.ok(/skip/i.test(output2), 'Second build did not skip as expected')
+        expect(/skip/i.test(output2)).toBe(true)
 
     it 'rebuilds after civetconfig.json changes', async ->
         await fs.writeJson(path.join(tempDir, 'civetconfig.json'),
@@ -55,8 +55,8 @@ describe 'Cache Invalidation on Config Change', ->
         )
 
         output3 := runBuild(tempDir)
-        assert.ok(output3.includes('Built 1'), 'Rebuild did not trigger')
+        expect(output3.includes('Built 1')).toBe(true)
 
         outFile := path.join(tempDir, 'a.ts')
         content := await fs.readFile(outFile, 'utf8')
-        assert.ok(content.includes('// @ts-nocheck'), 'ts-nocheck missing after config change')
+        expect(content.includes('// @ts-nocheck')).toBe(true)

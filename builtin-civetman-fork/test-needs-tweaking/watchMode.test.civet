@@ -1,10 +1,10 @@
-import { describe, it, before, after } from 'mocha'
+import { describe, it, beforeAll, afterAll, expect } from 'vitest'
 import { spawn, ChildProcess } from 'node:child_process'
 import fs from 'fs-extra'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import assert from 'node:assert'
-import stripAnsi from 'strip-ansi'
+
+stripAnsi := (str: string) => str.replace(/\u001b\[[0-9;]*m/g, '')
 
 // ESM replacements for __filename / __dirname
 __filename := fileURLToPath(import.meta.url)
@@ -36,8 +36,7 @@ describe "Civetman Watch – basic rebuild", () =>
     civetPath := path.join(testDir, "dummy.civet")
     tsPath    := path.join(testDir, "dummy.ts")
 
-    before async ->
-        @timeout 30000 // extra slack for initial build
+    beforeAll async ->
         // Prepare clean test folder
         await fs.remove(testDir)
         await fs.copy(fixtureDir, testDir)
@@ -54,15 +53,15 @@ describe "Civetman Watch – basic rebuild", () =>
 
         // Wait until watcher is ready
         await waitFor("Watching for changes")
+    , 30000 // timeout for beforeAll
 
-    after ->
+    afterAll ->
         watcher?.kill()
 
     it "should build initially and after a change", async ->
-        @timeout 20000
         // 1) Initial build verification
         content1 := await fs.readFile(tsPath, 'utf8')
-        assert(content1.includes("const a: number = 1"), "Initial TS output incorrect")
+        expect(content1.includes("const a: number = 1")).toBe(true)
 
         // 2) Trigger a change
         await fs.writeFile(civetPath, "a: number := 2\nexport {}")
@@ -70,4 +69,5 @@ describe "Civetman Watch – basic rebuild", () =>
 
         // 3) Confirm rebuild output
         content2 := await fs.readFile(tsPath, 'utf8')
-        assert(content2.includes("const a: number = 2"), "Rebuilt TS output incorrect")
+        expect(content2.includes("const a: number = 2")).toBe(true)
+    , 20000 // timeout for test
