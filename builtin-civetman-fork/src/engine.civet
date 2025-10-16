@@ -17,6 +17,7 @@ fs from "fs-extra"
 } from "./main.civet"
 
 { compile } from "@danielx/civet"
+import { rewriteCivetImports } from "./import-rewriter.civet"
 import type { CompileResult, CivetCompileResult, CompileStateUpdate } from "./types.civet"
 
 export class BuildEngine
@@ -136,7 +137,7 @@ export class BuildEngine
                 logDebug("[COMPILE] Compiling with worker", file)
                 workerResult := await @pool.exec({ file, content, isTsx, wantMap, parseOpts })
                 if workerResult.ok
-                    code = workerResult.code
+                    code = rewriteCivetImports(workerResult.code)
                     mapJson = workerResult.mapJson
                 else
                     throw new Error(workerResult.error)
@@ -151,7 +152,7 @@ export class BuildEngine
                 compileResult: CivetCompileResult := typeof rawResult === 'string' 
                     ? { code: rawResult } 
                     : rawResult as CivetCompileResult
-                code = compileResult.code
+                code = rewriteCivetImports(compileResult.code)
                 if wantMap and compileResult.sourceMap?
                     mapJson = compileResult.sourceMap.json(file, expectedOut)
         else
@@ -165,7 +166,7 @@ export class BuildEngine
             compileResult: CivetCompileResult := typeof rawResult === 'string' 
                 ? { code: rawResult } 
                 : rawResult as CivetCompileResult
-            code = compileResult.code
+            code = rewriteCivetImports(compileResult.code)
             if wantMap and compileResult.sourceMap?
                 mapJson = compileResult.sourceMap.json(file, expectedOut)
 

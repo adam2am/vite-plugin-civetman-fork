@@ -1,0 +1,146 @@
+import assert from 'node:assert'
+import { rewriteCivetImports, findAllImports } from '../src/import-rewriter.civet'
+
+describe 'Import Rewriter', ->
+  describe 'findAllImports', ->
+    it 'should find single-line imports with .civet', ->
+      code := 'import { foo } from "./module.civet"'
+      imports := findAllImports(code)
+      assert.strictEqual imports.length, 1
+      assert.strictEqual imports[0].spec, "./module.civet"
+      assert.strictEqual imports[0].type, "from"
+
+    it 'should find multi-line imports', ->
+      code := `import {
+        foo,
+        bar
+      } from "./module.civet"`
+      imports := findAllImports(code)
+      assert.strictEqual imports.length, 1
+      assert.strictEqual imports[0].spec, "./module.civet"
+
+    it 'should find type-only imports', ->
+      code := 'import type { Foo } from "./types.civet"'
+      imports := findAllImports(code)
+      assert.strictEqual imports.length, 1
+      assert.strictEqual imports[0].spec, "./types.civet"
+
+    it 'should handle single quotes', ->
+      code := "import { foo } from './module.civet'"
+      imports := findAllImports(code)
+      assert.strictEqual imports.length, 1
+      assert.strictEqual imports[0].spec, "./module.civet"
+
+    it 'should handle unquoted imports', ->
+      code := "import { foo } from ./module.civet"
+      imports := findAllImports(code)
+      assert.strictEqual imports.length, 1
+      assert.strictEqual imports[0].spec, "./module.civet"
+
+    it 'should ignore non-.civet imports', ->
+      code := 'import { foo } from "./module.ts"\nimport { bar } from "external"'
+      imports := findAllImports(code)
+      assert.strictEqual imports.length, 2
+      assert.strictEqual imports[0].spec, "./module.ts"
+      assert.strictEqual imports[1].spec, "external"
+
+    it 'should handle side-effect imports', ->
+      code := 'import "./module.civet"'
+      imports := findAllImports(code)
+      assert.strictEqual imports.length, 1
+      assert.strictEqual imports[0].spec, "./module.civet"
+      assert.strictEqual imports[0].type, "side-effect"
+
+  describe 'rewriteCivetImports', ->
+    it 'should rewrite single .civet import', ->
+      input := 'import { foo } from "./module.civet"'
+      result := rewriteCivetImports(input)
+      assert.strictEqual result, 'import { foo } from "./module"'
+
+    it 'should rewrite multiple .civet imports', ->
+      input := `import { foo } from "./module.civet"
+import { bar } from "./other.civet"`
+      result := rewriteCivetImports(input)
+      expected := `import { foo } from "./module"
+import { bar } from "./other"`
+      assert.strictEqual result, expected
+
+    it 'should preserve single quotes', ->
+      input := "import { foo } from './module.civet'"
+      result := rewriteCivetImports(input)
+      assert.strictEqual result, "import { foo } from './module'"
+
+    it 'should preserve unquoted imports', ->
+      input := "import { foo } from ./module.civet"
+      result := rewriteCivetImports(input)
+      assert.strictEqual result, "import { foo } from ./module"
+
+    it 'should not touch non-.civet imports', ->
+      input := `import { foo } from "./module.ts"
+import { bar } from "external"
+import { baz } from "./module.civet"`
+      result := rewriteCivetImports(input)
+      expected := `import { foo } from "./module.ts"
+import { bar } from "external"
+import { baz } from "./module"`
+      assert.strictEqual result, expected
+
+    it 'should handle mixed import types', ->
+      input := `import type { Foo } from "./types.civet"
+import { bar } from "./module.civet"
+import "./side-effect.civet"`
+      result := rewriteCivetImports(input)
+      expected := `import type { Foo } from "./types"
+import { bar } from "./module"
+import "./side-effect"`
+      assert.strictEqual result, expected
+
+    it 'should handle complex multi-line imports', ->
+      input := `import {
+        foo,
+        bar,
+        type Baz
+      } from "./complex.civet"`
+      result := rewriteCivetImports(input)
+      expected := `import {
+        foo,
+        bar,
+        type Baz
+      } from "./complex"`
+      assert.strictEqual result, expected
+
+    it 'should handle relative paths with ../', ->
+      input := 'import { foo } from "../parent/module.civet"'
+      result := rewriteCivetImports(input)
+      assert.strictEqual result, 'import { foo } from "../parent/module"'
+
+    it 'should handle absolute paths', ->
+      input := 'import { foo } from "/absolute/path/module.civet"'
+      result := rewriteCivetImports(input)
+      assert.strictEqual result, 'import { foo } from "/absolute/path/module"'
+
+    it 'should return unchanged code when no .civet imports', ->
+      input := `import { foo } from "./module.ts"
+import { bar } from "external"`
+      result := rewriteCivetImports(input)
+      assert.strictEqual result, input
+
+    it 'should handle empty string', ->
+      result := rewriteCivetImports("")
+      assert.strictEqual result, ""
+
+    it 'should handle code without imports', ->
+      input := `const foo = "bar"
+console.log(foo)`
+      result := rewriteCivetImports(input)
+      assert.strictEqual result, input
+
+    it 'should handle nested .civet in path', ->
+      input := 'import { foo } from "./civet-folder/module.civet"'
+      result := rewriteCivetImports(input)
+      assert.strictEqual result, 'import { foo } from "./civet-folder/module"'
+
+    it 'should not affect .civet in middle of path', ->
+      input := 'import { foo } from "./civet-folder.civet/module.ts"'
+      result := rewriteCivetImports(input)
+      assert.strictEqual result, 'import { foo } from "./civet-folder.civet/module.ts"'
