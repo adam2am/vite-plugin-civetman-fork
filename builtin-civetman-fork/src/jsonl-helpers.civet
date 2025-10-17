@@ -17,10 +17,10 @@ logDebug := (...args: unknown[]) => {
 
 // Remove stray *.civetmantmp files that belong to our outputs
 export cleanupTmpFiles := async (cwd: string) =>
-    tmpFiles := await glob("**/*.civetmantmp", { cwd: cwd })
+    tmpFiles := await glob("**/*.civetmantmp", { cwd: cwd, dot: true })
     for tmp of tmpFiles
         try
-            await fs.unlink(tmp)
+            await fs.unlink(path.join(cwd, tmp))
         catch (err: unknown)
             logDebug("[CLEANUP] Failed to remove stray tmp file", tmp, err)
 
@@ -50,6 +50,11 @@ export safeWrite := async (filePath: string, data: string | Buffer) =>
                 logDebug(`[safeWrite] Rename failed on attempt ${attempt}, retrying...`, { to: filePath, code: (err as any).code })
                 await new Promise((resolve) => setTimeout(resolve, 100 * attempt)) // Incremental backoff
             else
+                // Clean up temp file before throwing
+                try
+                    await fs.unlink(tmp)
+                catch cleanupErr
+                    logDebug(`[safeWrite] Failed to clean up temp file after error`, { tmp, cleanupErr })
                 // Re-throw if it's not a retryable error or if we've run out of attempts
                 throw err
 

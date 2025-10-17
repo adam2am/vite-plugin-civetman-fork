@@ -1,0 +1,91 @@
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import fs from 'fs-extra'
+import path from 'node:path'
+import os from 'node:os'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+// ESM replacements for __filename / __dirname
+__filename := fileURLToPath(import.meta.url)
+__dirname  := path.dirname(__filename)
+
+stripAnsi := (str: string) => str.replace(/\u001b\[[0-9;]*m/g, '')
+
+describe "Temporary File Cleanup", ->
+    testDir: string | null .= null
+    
+    beforeAll async ->
+        // Create a temporary test directory
+        testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'civetman-tmp-test-'))
+        
+        // Create a minimal test setup
+        await fs.writeFile(path.join(testDir, 'test.civet'), 'export x := 1')
+        await fs.writeFile(path.join(testDir, 'civetconfig.json'), JSON.stringify({ outDir: '.' }))
+    
+    afterAll async ->
+        if testDir
+            await fs.remove(testDir).catch(() => {})
+    
+    it("should not leave .civetmantmp files after build", async ->
+        if !testDir then throw new Error("testDir not initialized")
+        
+        cli := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
+        unless await fs.pathExists(cli)
+            throw new Error("Civetman CLI not built – run bun run build before tests")
+        
+        // Run build
+        await new Promise<void> (resolve, reject) ->
+            child := spawn('node', [cli, 'build'], { 
+                cwd: testDir!, 
+                shell: process.platform === 'win32'
+            })
+            
+            output .= ''
+            child.stdout?.on('data', (chunk) => output += stripAnsi(String(chunk)))
+            child.stderr?.on('data', (chunk) => output += stripAnsi(String(chunk)))
+            
+            child.on 'close', (code) ->
+                if code === 0
+                    resolve()
+                else
+                    reject(new Error(`Build failed with code ${code}: ${output}`))
+        
+        // Check for any .civetmantmp files in the test directory
+        allFiles := await fs.readdir(testDir!, { recursive: true, withFileTypes: true })
+        tmpFiles := allFiles
+            .filter((dirent) => dirent.isFile() && dirent.name.endsWith('.civetmantmp'))
+            .map((dirent) => dirent.name)
+        
+        // Assert no temp files were left behind
+        expect(tmpFiles).toEqual([])
+    , 15000)
+    
+    it("should clean up .civetmantmp files from root directory", async ->
+        // This test specifically checks for the bug where .gitignore temp files
+        // are created in the project root with paths like:
+        // ..gitignore.5a4843f9-7bad-4f9d-8bb5-74f7afbe7df6.civetmantmp
+        
+        if !testDir then throw new Error("testDir not initialized")
+        
+        // Manually create a stray temp file to simulate the bug
+        strayTmpFile := path.join(testDir!, '..gitignore.test-uuid.civetmantmp')
+        await fs.writeFile(strayTmpFile, '# test content')
+        
+        // Verify it exists
+        expect(await fs.pathExists(strayTmpFile)).toBe(true)
+        
+        // Run build which should clean up temp files
+        cli := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
+        await new Promise<void> (resolve, reject) ->
+            child := spawn('node', [cli, 'build'], { 
+                cwd: testDir!, 
+                shell: process.platform === 'win32'
+            })
+            
+            child.on 'close', (code) ->
+                if code === 0 then resolve() else reject(new Error(`Build failed with code ${code}`))
+        
+        // Verify the stray temp file was cleaned up
+        expect(await fs.pathExists(strayTmpFile)).toBe(false)
+    , 15000)
+

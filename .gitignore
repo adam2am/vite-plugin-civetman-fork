@@ -171,8 +171,10 @@ dist
 dist
 .vscode
 /.civetman/
+**/*.civetmantmp
 
 # civetman:start - Managed by civetman. DO NOT EDIT THIS BLOCK.
+builtin-civetman-fork/debug-test/mixed.ts
 builtin-civetman-fork/src/engine.ts
 builtin-civetman-fork/src/import-rewriter.ts
 builtin-civetman-fork/src/jsonl-helpers.ts
@@ -189,6 +191,7 @@ builtin-civetman-fork/tests/importRewriter.test.ts
 builtin-civetman-fork/tests/importRewriterIntegration.test.ts
 builtin-civetman-fork/tests/resolveOutputType.test.ts
 builtin-civetman-fork/tests/temp-watch-test/dummy.ts
+builtin-civetman-fork/tests/tmpFileCleanup.test.ts
 builtin-civetman-fork/tests/workerCrash.test.ts
 # civetman:end - End of civetman managed block.
 
