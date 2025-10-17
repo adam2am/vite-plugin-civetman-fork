@@ -1,7 +1,7 @@
 import { describe, it, beforeAll, afterAll, expect } from 'vitest'
 import fs from 'fs-extra'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 stripAnsi := (str: string) => str.replace(/\u001b\[[0-9;]*m/g, '')
@@ -14,12 +14,21 @@ __dirname  := path.dirname(__filename)
 tempDir := path.resolve(__dirname, 'temp-invalidation-test')
 cliPath := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
 
-runBuild := (cwd: string) ->
-    result := spawnSync('node', [cliPath, 'build'], { cwd, encoding: 'utf8' })
-    unless result.status == 0
-        console.error(stripAnsi(result.stdout + result.stderr))
-        throw new Error('Build failed')
-    stripAnsi(result.stdout + result.stderr)
+runBuild := (cwd: string): Promise<string> ->
+    new Promise (resolve, reject) ->
+        child := spawn('node', [cliPath, 'build'], { cwd, shell: process.platform === 'win32' })
+        output .= ''
+        
+        child.stdout?.on('data', (data) => output += data.toString())
+        child.stderr?.on('data', (data) => output += data.toString())
+
+        child.on 'error', reject
+        child.on 'close', (code) ->
+            if code == 0
+                resolve(stripAnsi(output))
+            else
+                console.error(stripAnsi(output)) // Log output on failure
+                reject(new Error(`Build failed with code ${code}`))
 
 describe 'Cache Invalidation on Config Change', ->
     beforeAll async ->
@@ -36,25 +45,28 @@ describe 'Cache Invalidation on Config Change', ->
         await fs.remove(tempDir)
 
     it 'performs an initial build', async ->
-        output1 := runBuild(tempDir)
+        output1 := await runBuild(tempDir)
         expect(output1.includes('Built 1')).toBe(true)
 
         outFile := path.join(tempDir, 'a.ts')
         expect(await fs.pathExists(outFile)).toBe(true)
         content := await fs.readFile(outFile, 'utf8')
-        expect(!content.includes('// @ts-nocheck')).toBe(true)
+        expect(content.includes('// @ts-nocheck')).toBe(false)
 
     it 'skips compilation on a second run with no changes', async ->
-        output2 := runBuild(tempDir)
+        output2 := await runBuild(tempDir)
         expect(/skip/i.test(output2)).toBe(true)
 
     it 'rebuilds after civetconfig.json changes', async ->
-        await fs.writeJson(path.join(tempDir, 'civetconfig.json'),
-            parseOptions:
+        configPath := path.join(tempDir, 'civetconfig.json')
+        await fs.writeJson(configPath, {
+            parseOptions: {
                 js: true
-        )
+            }
+        })
+        await new Promise((resolve) => setTimeout(resolve, 100)) // fs grace period
 
-        output3 := runBuild(tempDir)
+        output3 := await runBuild(tempDir)
         expect(output3.includes('Built 1')).toBe(true)
 
         outFile := path.join(tempDir, 'a.ts')

@@ -6,6 +6,7 @@
 
 fs from "fs-extra"
 { WorkerPool } from "./workerPool.civet"
+{ findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 // Import helpers and types from the main module.
 {   writeOutputAndGetResult,
@@ -112,15 +113,14 @@ export class BuildEngine
             readData := await fs.readFile(file, "utf8")
             @contentCache.set(file, readData)
             readData
-        // Reuse parseOptions loaded once at the start of the build run
+        
         parseOpts := @ctx.parseOpts
+        signature := makeSignature(content, { tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles, configContent: @ctx.configContent })
 
-        signature := makeSignature(content, { tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles, parseOpts })
-
-        // Skip check
+        // Skip check (respect --force flag)
         prev := @ctx.prevHashes[file]
         expectedOut := fileToOutFile(file, isTsx)
-        if prev and prev.sig == signature and prev.outFile == expectedOut and await fs.pathExists(expectedOut)
+        if !@ctx.opts.force and prev and prev.sig == signature and prev.outFile == expectedOut and await fs.pathExists(expectedOut)
             // Return the skip result - let the caller handle state updates
             logDebug("[COMPILE] Skipping (signature match)", file)
             return { status: "skip", file, outFile: expectedOut, signature: signature }

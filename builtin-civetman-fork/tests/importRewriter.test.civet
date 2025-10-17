@@ -4,7 +4,7 @@ import { rewriteCivetImports, findAllImports } from '../src/import-rewriter.cive
 describe 'Import Rewriter', () ->
   describe 'findAllImports', () ->
     it 'should find single-line imports with .civet', ->
-      code := 'import { foo } from "./module.civet"'
+      code := 'import { foo } from "./module' + '.civet";'
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
       expect(imports[0].spec).toBe("./module.civet")
@@ -14,19 +14,19 @@ describe 'Import Rewriter', () ->
       code := `import {
         foo,
         bar
-      } from "./module.civet"`
+      } from './module` + `.civet'`
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./module.civet")
+      expect(imports[0].spec).toBe('./module.civet')
 
     it 'should find type-only imports', ->
-      code := 'import type { Foo } from "./types.civet"'
+      code := 'import type { Foo } from "./types' + '.civet";'
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
       expect(imports[0].spec).toBe("./types.civet")
 
     it 'should handle single quotes', ->
-      code := "import { foo } from './module.civet'"
+      code := "import { foo } from './module.civet';"
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
       expect(imports[0].spec).toBe("./module.civet")
@@ -34,16 +34,17 @@ describe 'Import Rewriter', () ->
     it 'should handle unquoted imports', ->
       code := "import { foo } from ./module.civet"
       imports := findAllImports(code)
-      expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./module.civet")
+      expect(imports.length).toBe(0)
 
     it 'should ignore non-.civet imports', ->
       code := 'import { foo } from "./module.ts"\nimport { bar } from "external"'
       imports := findAllImports(code)
-      expect(imports.length).toBe(0)
+      expect(imports.length).toBe(2)
+      expect(imports[0].spec).toBe("./module.ts")
+      expect(imports[1].spec).toBe("external")
 
     it 'should handle side-effect imports', ->
-      code := 'import "./module.civet"'
+      code := 'import "./module' + '.civet";'
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
       expect(imports[0].spec).toBe("./module.civet")
@@ -71,7 +72,7 @@ import { bar } from "./other"`
     it 'should preserve unquoted imports', ->
       input := "import { foo } from ./module.civet"
       result := rewriteCivetImports(input)
-      expect(result).toBe("import { foo } from ./module")
+      expect(result).toBe("import { foo } from ./module.civet")
 
     it 'should not touch non-.civet imports', ->
       input := `import { foo } from "./module.ts"

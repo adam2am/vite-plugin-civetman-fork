@@ -71,6 +71,8 @@ interface CivetmanOptions {
   ignoreFolders?: string | string[];
   /** Folder(s) to exclusively build/watch */
   onlyFolders?: string | string[];
+  /** Force recompilation of all files, ignoring the cache */
+  force?: boolean;
 }
 
 /**
@@ -91,6 +93,7 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
     forcePolling: false,
     ignoreFolders: [],
     onlyFolders: [],
+    force: false,
     ...options
   };
   // Default output dirs if none specified
@@ -132,10 +135,11 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
       const dirs = Array.isArray(value) ? value : [value];
       return dirs.flatMap(dir => ['--only-folders', dir]);
     },
+    force: (v: boolean) => v ? ['--force'] : [],
   } as Record<keyof CivetmanOptions, (value: unknown) => string[]>;
   // Specify order of flags
   const flagOrder: (keyof typeof flagGenerators)[] = [
-    'tsx', 'gitIgnore', 'vscodeHide', 'inlineMap', 'mapFiles', 'outTs', 'outTsx', 'ignoreFolders', 'onlyFolders', 'concurrency', 'forcePolling'
+    'tsx', 'gitIgnore', 'vscodeHide', 'inlineMap', 'mapFiles', 'outTs', 'outTsx', 'ignoreFolders', 'onlyFolders', 'concurrency', 'forcePolling', 'force'
   ];
 
   function getFlags(): string[] {

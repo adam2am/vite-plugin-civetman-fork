@@ -14,6 +14,7 @@ export default defineConfig({
 		mapFiles: false,
 		outTs: 'builtin-civetman-fork/src',
 		ignoreFolders: ['node_modules', 'dist', 'tests'],
-		concurrency: 4
+		concurrency: 4,
+		force: false
 	}) as PluginOption],
 }) 

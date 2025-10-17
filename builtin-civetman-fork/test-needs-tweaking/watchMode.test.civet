@@ -29,10 +29,10 @@ waitFor := (text: string, timeout = 10000) ->
             setTimeout(check, 50)
         check()
 
-describe "Civetman Watch – basic rebuild", () =>
+describe "Civetman Watch – basic rebuild", ->
     watcher: ChildProcess | null .= null
-    testDir := path.join(__dirname, "temp-watch-test")
-    fixtureDir := path.join(__dirname, "fixture")
+    testDir := path.resolve(__dirname, "temp-watch-test")
+    fixtureDir := path.resolve(__dirname, "..", "tests", "fixture")
     civetPath := path.join(testDir, "dummy.civet")
     tsPath    := path.join(testDir, "dummy.ts")
 
@@ -43,11 +43,11 @@ describe "Civetman Watch – basic rebuild", () =>
 
         // Ensure CLI is built (dist/cli/index.js)
         cli := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
-        unless await fs.exists(cli)
+        unless await fs.pathExists(cli)
             throw new Error("Civetman CLI not built – run pnpm run build before tests")
 
         // Start watcher process
-        watcher = spawn('node', [cli, 'dev'], { cwd: testDir })
+        watcher = spawn('node', [cli, 'dev'], { cwd: testDir, shell: process.platform === 'win32' })
         watcher.stdout?.on('data', appendOutput)
         watcher.stderr?.on('data', appendOutput)
 
@@ -55,10 +55,10 @@ describe "Civetman Watch – basic rebuild", () =>
         await waitFor("Watching for changes")
     , 30000 // timeout for beforeAll
 
-    afterAll ->
+    afterAll async ->
         watcher?.kill()
 
-    it "should build initially and after a change", async ->
+    it("should build initially and after a change", async ->
         // 1) Initial build verification
         content1 := await fs.readFile(tsPath, 'utf8')
         expect(content1.includes("const a: number = 1")).toBe(true)
@@ -70,4 +70,4 @@ describe "Civetman Watch – basic rebuild", () =>
         // 3) Confirm rebuild output
         content2 := await fs.readFile(tsPath, 'utf8')
         expect(content2.includes("const a: number = 2")).toBe(true)
-    , 20000 // timeout for test
+    , 20000) // timeout for test

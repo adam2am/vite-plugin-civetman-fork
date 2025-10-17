@@ -90,7 +90,9 @@ export type BuildContext =
     // new hashes produced this run
     newHashes: Record<string, { sig: string, outFile: string }>,
     // cached Civet parseOptions loaded once per build run
-    parseOpts?: CivetParseOptions
+    parseOpts?: CivetParseOptions,
+    // cached Civet config file content loaded once per run
+    configContent: string
 
 // ---------------- helper utils (pure) ----------------
 
@@ -128,7 +130,8 @@ export makeSignature := (
         tsx: boolean, 
         inlineMap: string | boolean, 
         mapFiles: boolean, 
-        parseOpts?: CivetParseOptions }
+        configContent?: string
+    }
 ) : string =>
     computeHash(
         content +
@@ -136,7 +139,7 @@ export makeSignature := (
             tsx: opts.tsx, 
             inlineMap: opts.inlineMap, 
             mapFiles: opts.mapFiles, 
-            parseOpts: opts.parseOpts ?? null }) +
+            configContent: opts.configContent ?? "" }) +
         buildFingerprint
     )
 
@@ -333,14 +336,17 @@ export compileSource := async (ctx: BuildContext, file: string): Promise<Compile
     content := await fs.readFile(file, "utf8")
 
     //  -- look for a civet config file (🐈.json, civetconfig.json, etc.) to include in signature and pass to compiler
-    // Use cached parse options if available to avoid repeated disk lookups
-    parseOpts := ctx.parseOpts
+    // Reload config to ensure we have the latest parse options for cache invalidation
+    configPath := await findCivetConfig(ctx.cwd)
+    configContent := (configPath and await fs.pathExists(configPath)) ? await fs.readFile(configPath, "utf8") : ""
+    civetConfig := (configPath? ? await loadCivetConfig(configPath) : {}) || {}
+    parseOpts := civetConfig?.parseOptions
 
     signature := makeSignature(content, { 
         tsx: isTsx, 
         inlineMap: ctx.opts.inlineMap, 
         mapFiles: ctx.opts.mapFiles, 
-        parseOpts })
+        configContent })
 
     prev := ctx.prevHashes[file]
     logDebug("[COMPILE] Sig check", { file, signature, prevSig: prev?.sig })
@@ -541,6 +547,7 @@ runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
     // Step 2: load previous state and create context
     // Load Civet config once and cache its parseOptions for the whole build run
     configPath := await findCivetConfig(cwd)
+    configContent := (configPath and await fs.pathExists(configPath)) ? await fs.readFile(configPath, "utf8") : ""
     civetConfig := (configPath? ? await loadCivetConfig(configPath) : {}) || {}
     cachedParseOpts := civetConfig?.parseOptions
 
@@ -553,7 +560,8 @@ runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
         prevGenerated: prevGenerated,
         prevHashes: prevHashes,
         newHashes: {},
-        parseOpts: cachedParseOpts
+        parseOpts: cachedParseOpts,
+        configContent: configContent
 
     // Create the build engine which orchestrates compilation.
     engine := new BuildEngine(ctx)
