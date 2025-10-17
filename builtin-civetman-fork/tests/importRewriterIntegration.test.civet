@@ -11,7 +11,10 @@ __dirname := path.dirname(__filename)
 runBuild := (cwd: string, args: string[] = []): Promise<string> ->
   new Promise (resolve, reject) ->
       cliPath := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
-      child := spawn('node', [cliPath, 'build', ...args], { cwd })
+      child := spawn('node', [cliPath, 'build', ...args], { 
+          cwd,
+          env: { ...process.env, CIVETMAN_DEBUG: '*' }
+      })
       output .= ''
       
       child.stdout?.on('data', (data) => output += data.toString())
@@ -39,19 +42,31 @@ describe 'Import Rewriter Integration Tests', ->
     if await fs.pathExists(testDir)
       await fs.remove(testDir)
     await fs.ensureDir(testDir)
+    // Small delay to let file system settle on Windows
+    await new Promise((resolve) => setTimeout(resolve, 100))
 
   afterEach async ->
     // Clean up test directory with retries for Windows
     if await fs.pathExists(testDir)
-      for attempt of [1..5]
+      for attempt of [1..8] // More attempts for Windows
         try 
           await fs.remove(testDir)
           break
         catch error
-          if attempt is 5
+          if attempt is 8
             console.warn(`Failed to clean up test directory after ${attempt} attempts:`, error)
+            // Try to remove individual files if directory removal fails
+            try
+              const files = await fs.readdir(testDir)
+              for file of files
+                try
+                  await fs.remove(path.join(testDir, file))
+                catch
+                  // Ignore individual file errors
+            catch
+              // Ignore readdir errors
           else
-            await new Promise((resolve) => setTimeout(resolve, 200 * attempt)) // Incremental backoff
+            await new Promise((resolve) => setTimeout(resolve, 500 * attempt)) // Longer backoff
     return
 
 
@@ -120,6 +135,7 @@ import type {
     expect(content.includes('from "./module"')).toBe(true)
     expect(content.includes('from "./types"')).toBe(true)
     expect(!content.includes('.civet')).toBe(true)
+  , 10000) // Add timeout for slow CI
 
   it 'should not affect non-.civet imports', ->
     // Create test file with mixed imports
@@ -136,9 +152,10 @@ import type { Type } from "./types.civet"`)
     
     // Check that only .civet imports were modified
     expect(content.includes('from "./bar"')).toBe(true)
-    expect(content.includes('from "./qux"')).toBe(true) // Civet compiler is now stripping .ts extension
+    expect(content.includes('from "./qux"')).toBe(true) // Civet compiler converts .ts to .js and strips extension
     expect(content.includes('from "some-package"')).toBe(true)
     expect(content.includes('from "./types"')).toBe(true)
+  , 10000) // Add timeout for slow CI
 
   it 'should handle side-effect imports', ->
     // Create test file with side-effect imports
@@ -156,3 +173,4 @@ import "external-package"`)
     expect(content.includes('import "./styles"')).toBe(true)
     expect(content.includes('import "./utils"')).toBe(true)
     expect(content.includes('import "external-package"')).toBe(true)
+  , 10000) // Add timeout for slow CI

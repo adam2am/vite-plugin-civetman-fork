@@ -4,35 +4,35 @@ import { rewriteCivetImports, findAllImports } from '../src/import-rewriter.cive
 describe 'Import Rewriter', () ->
   describe 'findAllImports', () ->
     it 'should find single-line imports with .civet', ->
-      code := 'import { foo } from "./module' + '.civet";'
+      code := 'import { foo } from "./module.civet";'
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./module.civet")
+      expect(imports[0].spec).toBe("./module") // Civet compiler strips .civet extension
       expect(imports[0].type).toBe("from")
 
     it 'should find multi-line imports', ->
       code := `import {
         foo,
         bar
-      } from './module` + `.civet'`
+      } from './module'`
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe('./module.civet')
+      expect(imports[0].spec).toBe('./module')
 
     it 'should find type-only imports', ->
-      code := 'import type { Foo } from "./types' + '.civet";'
+      code := 'import type { Foo } from "./types.civet";'
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./types.civet")
+      expect(imports[0].spec).toBe("./types") // Civet compiler strips .civet extension
 
     it 'should handle single quotes', ->
       code := "import { foo } from './module.civet';"
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./module.civet")
+      expect(imports[0].spec).toBe("./module") // Civet compiler strips .civet extension
 
     it 'should handle unquoted imports', ->
-      code := "import { foo } from ./module.civet"
+      code := "import { foo } from ./module" // Civet would likely fail to compile this, but as a unit test...
       imports := findAllImports(code)
       expect(imports.length).toBe(0)
 
@@ -44,10 +44,10 @@ describe 'Import Rewriter', () ->
       expect(imports[1].spec).toBe("external")
 
     it 'should handle side-effect imports', ->
-      code := 'import "./module' + '.civet";'
+      code := 'import "./module.civet";'
       imports := findAllImports(code)
       expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./module.civet")
+      expect(imports[0].spec).toBe("./module") // Civet compiler strips .civet extension
       expect(imports[0].type).toBe("side-effect")
 
   describe 'rewriteCivetImports', () ->

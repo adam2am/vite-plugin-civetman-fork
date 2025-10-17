@@ -284,8 +284,7 @@ export writeOutputAndGetResult := async (
     expectedOut := fileToOutFile(file, isTsx)
     codeOut .= code
     
-    // Rewrite .civet imports to remove extensions
-    codeOut = rewriteCivetImports(codeOut)
+    // Note: .civet imports are already rewritten in the engine
     
     mapFile := expectedOut + ".map"
 
@@ -924,5 +923,4 @@ debounce := <T extends unknown[]>(func: (...args: T) => void, timeout = 1000) ->
             // While timer active, update the pending args for a single trailing call
             pendingArgs = args
 
-export computeHash, resolveOutputType, defaultOpts
-export { rewriteCivetImports } 
+export { computeHash, resolveOutputType, defaultOpts, rewriteCivetImports } 

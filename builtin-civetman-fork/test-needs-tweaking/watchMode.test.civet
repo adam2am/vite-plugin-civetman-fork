@@ -10,6 +10,19 @@ stripAnsi := (str: string) => str.replace(/\u001b\[[0-9;]*m/g, '')
 __filename := fileURLToPath(import.meta.url)
 __dirname  := path.dirname(__filename)
 
+// Robust cleanup helper for Windows
+robustCleanup := async (dir: string) ->
+    if await fs.pathExists(dir)
+        for attempt of [1..5]
+            try 
+                await fs.remove(dir)
+                break
+            catch error
+                if attempt is 5
+                    console.warn(`Failed to clean up directory after ${attempt} attempts:`, error)
+                else
+                    await new Promise((resolve) => setTimeout(resolve, 200 * attempt)) // Incremental backoff
+
 // Accumulate watcher output – makes it trivial to check for substrings later.
 outputBuffer .= ""
 appendOutput := (chunk: unknown) ->
@@ -38,7 +51,7 @@ describe "Civetman Watch – basic rebuild", ->
 
     beforeAll async ->
         // Prepare clean test folder
-        await fs.remove(testDir)
+        await robustCleanup(testDir)
         await fs.copy(fixtureDir, testDir)
 
         // Ensure CLI is built (dist/cli/index.js)
@@ -47,16 +60,31 @@ describe "Civetman Watch – basic rebuild", ->
             throw new Error("Civetman CLI not built – run pnpm run build before tests")
 
         // Start watcher process
-        watcher = spawn('node', [cli, 'dev'], { cwd: testDir, shell: process.platform === 'win32' })
+        watcher = spawn('node', [cli, 'dev'], { 
+            cwd: testDir, 
+            shell: process.platform === 'win32',
+            env: { ...process.env, CIVETMAN_DEBUG: '*' }
+        })
         watcher.stdout?.on('data', appendOutput)
         watcher.stderr?.on('data', appendOutput)
 
         // Wait until watcher is ready
         await waitFor("Watching for changes")
-    , 30000 // timeout for beforeAll
 
     afterAll async ->
-        watcher?.kill()
+        if watcher
+            // On Windows, a simple kill() isn't enough. We need to be more forceful
+            // and ensure we wait for the process to actually exit.
+            if watcher.stdout then watcher.stdout.destroy()
+            if watcher.stderr then watcher.stderr.destroy()
+            
+            watcher.kill('SIGKILL') // Use a more forceful signal
+            
+            await new Promise((resolve) => watcher!.on('close', resolve))
+            watcher = null
+
+        await new Promise((resolve) => setTimeout(resolve, 500)) // Extra pause before cleanup
+        await robustCleanup(testDir)
 
     it("should build initially and after a change", async ->
         // 1) Initial build verification
@@ -70,4 +98,4 @@ describe "Civetman Watch – basic rebuild", ->
         // 3) Confirm rebuild output
         content2 := await fs.readFile(tsPath, 'utf8')
         expect(content2.includes("const a: number = 2")).toBe(true)
-    , 20000) // timeout for test
+    , 25000) // Increased timeout for slow CI

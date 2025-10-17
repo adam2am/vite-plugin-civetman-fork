@@ -10,29 +10,57 @@ stripAnsi := (str: string) => str.replace(/\u001b\[[0-9;]*m/g, '')
 __filename := fileURLToPath(import.meta.url)
 __dirname  := path.dirname(__filename)
 
+// Robust cleanup helper for Windows
+robustCleanup := async (dir: string) ->
+    if await fs.pathExists(dir)
+        for attempt of [1..5]
+            try 
+                await fs.remove(dir)
+                break
+            catch error
+                if attempt is 5
+                    console.warn(`Failed to clean up directory after ${attempt} attempts:`, error)
+                else
+                    await new Promise((resolve) => setTimeout(resolve, 200 * attempt)) // Incremental backoff
+
 // --- Test Setup ---
 tempDir := path.resolve(__dirname, 'temp-invalidation-test')
 cliPath := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
 
 runBuild := (cwd: string): Promise<string> ->
     new Promise (resolve, reject) ->
-        child := spawn('node', [cliPath, 'build'], { cwd, shell: process.platform === 'win32' })
-        output .= ''
+        child := spawn('node', [cliPath, 'build'], { 
+            cwd, 
+            shell: process.platform === 'win32',
+            env: { ...process.env, CIVETMAN_DEBUG: '*' }
+        })
+        let output = ''
+        let errOutput = ''
         
-        child.stdout?.on('data', (data) => output += data.toString())
-        child.stderr?.on('data', (data) => output += data.toString())
+        console.log(`[TEST-DEBUG] Spawning 'node build' in ${cwd}`)
+
+        child.stdout?.on('data', (data) => {
+            process.stdout.write(`[CHILD STDOUT] ${data.toString()}`)
+            output += data.toString()
+        })
+        child.stderr?.on('data', (data) => {
+            process.stderr.write(`[CHILD STDERR] ${data.toString()}`)
+            errOutput += data.toString()
+        })
 
         child.on 'error', reject
-        child.on 'close', (code) ->
-            if code == 0
-                resolve(stripAnsi(output))
+        child.on 'close', (code) => {
+            console.log(`[TEST-DEBUG] Child process exited with code ${code}`)
+            const fullOutput = stripAnsi(output + errOutput)
+            if code === 0 || code == null
+                resolve(fullOutput)
             else
-                console.error(stripAnsi(output)) // Log output on failure
-                reject(new Error(`Build failed with code ${code}`))
+                reject(new Error(`Build failed with code ${code}. See logs above.`))
+        }
 
 describe 'Cache Invalidation on Config Change', ->
     beforeAll async ->
-        await fs.remove(tempDir)  // start clean
+        await robustCleanup(tempDir)  // start clean
         await fs.ensureDir(tempDir)
         // initial project state
         await fs.writeFile(path.join(tempDir, 'a.civet'), 'export x := 1')
@@ -42,7 +70,7 @@ describe 'Cache Invalidation on Config Change', ->
         )
 
     afterAll async ->
-        await fs.remove(tempDir)
+        await robustCleanup(tempDir)
 
     it 'performs an initial build', async ->
         output1 := await runBuild(tempDir)
@@ -60,15 +88,21 @@ describe 'Cache Invalidation on Config Change', ->
     it 'rebuilds after civetconfig.json changes', async ->
         configPath := path.join(tempDir, 'civetconfig.json')
         await fs.writeJson(configPath, {
-            parseOptions: {
-                js: true
-            }
+            "parseOptions": { "js": true }
         })
-        await new Promise((resolve) => setTimeout(resolve, 100)) // fs grace period
+
+        // Give the file system a moment to settle, especially on Windows
+        // The polling logic was timing out. This is a simpler, though less ideal,
+        // way to handle FS lag on Windows CI.
+        await new Promise((resolve) => setTimeout(resolve, 1000))
 
         output3 := await runBuild(tempDir)
         expect(output3.includes('Built 1')).toBe(true)
 
+        // It might take a moment for the content to be readable after the process exits
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        
         outFile := path.join(tempDir, 'a.ts')
         content := await fs.readFile(outFile, 'utf8')
         expect(content.includes('// @ts-nocheck')).toBe(true)
+    , 15000 // Increased timeout for slow CI

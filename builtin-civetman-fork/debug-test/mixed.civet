@@ -1,0 +1,4 @@
+import { foo } from "./bar.civet"
+import { baz } from "./qux.ts"
+import { external } from "some-package"
+import type { Type } from "./types.civet"
