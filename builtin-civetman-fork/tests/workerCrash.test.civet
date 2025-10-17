@@ -52,7 +52,15 @@ describe "WorkerPool – crash recovery", () =>
         expect(pool.idle.length).toBe(0)
 
         // The next compile should spawn a fresh worker and succeed
-        res2 := await pool.exec({ file: file2, content: 'b: number := 2\nexport {}', isTsx: false, wantMap: false })
+        let res2: any
+        try {
+            res2 = await pool.exec({ file: file2, content: 'b: number := 2\nexport {}', isTsx: false, wantMap: false })
+        } catch (e) {
+            console.error("Second compilation failed after worker crash:", e)
+            // Force failure with the actual error logged above
+            expect(e).toBe(undefined)
+        }
+
         expect(res2.ok).toBe(true)
         if res2.ok
             expect(res2.code.includes('const b:')).toBe(true)

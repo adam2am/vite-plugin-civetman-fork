@@ -79,6 +79,11 @@ describe 'Cache Invalidation on Config Change', ->
         outFile := path.join(tempDir, 'a.ts')
         expect(await fs.pathExists(outFile)).toBe(true)
         content := await fs.readFile(outFile, 'utf8')
+        
+        // Debug logging: show actual content if assertion fails
+        if (content.includes('// @ts-nocheck')) {
+            console.log(`[DEBUG] Unexpected @ts-nocheck found in ${outFile}:\n---\n${content}\n---`)
+        }
         expect(content.includes('// @ts-nocheck')).toBe(false)
 
     it 'skips compilation on a second run with no changes', async ->
@@ -104,5 +109,10 @@ describe 'Cache Invalidation on Config Change', ->
         
         outFile := path.join(tempDir, 'a.ts')
         content := await fs.readFile(outFile, 'utf8')
+        
+        // Debug logging: show actual content if assertion fails
+        if (!content.includes('// @ts-nocheck')) {
+            console.log(`[DEBUG] Expected @ts-nocheck not found in ${outFile}:\n---\n${content}\n---`)
+        }
         expect(content.includes('// @ts-nocheck')).toBe(true)
     , 15000 // Increased timeout for slow CI

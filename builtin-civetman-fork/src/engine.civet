@@ -135,7 +135,9 @@ export class BuildEngine
         if (@ctx.opts.concurrency ?? 2) > 1 and @pool.poolAvailable
             try
                 logDebug("[COMPILE] Compiling with worker", file)
-                workerResult := await @pool.exec({ file, content, isTsx, wantMap, parseOpts })
+                // Sanitize parseOpts to ensure it's serializable for the worker thread.
+                serializableParseOpts := parseOpts ? JSON.parse(JSON.stringify(parseOpts)) : null
+                workerResult := await @pool.exec({ file, content, isTsx, wantMap, parseOpts: serializableParseOpts })
                 if workerResult.ok
                     code = rewriteCivetImports(workerResult.code)
                     mapJson = workerResult.mapJson
@@ -145,7 +147,7 @@ export class BuildEngine
                 logDebug("[COMPILE] Worker failed, falling back", workerErr)
                 compileOpts := {
                     filename: file,
-                    sourceMap: wantMap,
+                    ...(wantMap ? { sourceMap: true } : {}),
                     ...(parseOpts ? { parseOptions: parseOpts } : {})
                 }
                 rawResult := await compile(content, compileOpts)
@@ -159,7 +161,7 @@ export class BuildEngine
             logDebug("[COMPILE] Compiling in-process", file)
             compileOpts := {
                 filename: file,
-                sourceMap: wantMap,
+                ...(wantMap ? { sourceMap: true } : {}),
                 ...(parseOpts ? { parseOptions: parseOpts } : {})
             }
             rawResult := await compile(content, compileOpts)

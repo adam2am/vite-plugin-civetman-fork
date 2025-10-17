@@ -35,9 +35,23 @@ export type HashEntry =
 // ------------------------------------------------------------------
 export safeWrite := async (filePath: string, data: string | Buffer) =>
     await fs.ensureDir(path.dirname(filePath))
-    tmp := filePath + "." + randomUUID() + ".civetmantmp"
+    // Use a path within the same directory for atomic rename & make it hidden
+    tmp := path.join(path.dirname(filePath), `.${path.basename(filePath)}.${randomUUID()}.civetmantmp`)
     await fs.writeFile(tmp, data)
-    await fs.rename(tmp, filePath)
+    
+    // Retry rename on Windows to handle EPERM/EBUSY errors from file locks
+    for attempt of [1..5]
+        try
+            await fs.rename(tmp, filePath)
+            return // Success
+        catch (err: unknown)
+            // Check for specific Windows file lock errors
+            if (err as any).code in ['EPERM', 'EBUSY'] and attempt < 5
+                logDebug(`[safeWrite] Rename failed on attempt ${attempt}, retrying...`, { to: filePath, code: (err as any).code })
+                await new Promise((resolve) => setTimeout(resolve, 100 * attempt)) // Incremental backoff
+            else
+                // Re-throw if it's not a retryable error or if we've run out of attempts
+                throw err
 
 
 // Reads a .jsonl file and reconstructs the latest state for each key.

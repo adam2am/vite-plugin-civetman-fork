@@ -99,28 +99,26 @@ export type BuildContext =
 computeHash := (input: string): string =>
     createHash("sha256").update(input).digest("hex")
 
-// Apply state updates to BuildContext (pure function)
-applyStateUpdate := (ctx: BuildContext, update: CompileStateUpdate): BuildContext =>
-    // Create new context with updated state
-    newCtx: BuildContext := {
-        ...ctx,
-        outFiles: new Set([...ctx.outFiles, ...update.outFiles]),
-        newHashes: { ...ctx.newHashes, ...update.newHashes }
-    }
+// Apply state updates to BuildContext (mutates the context object)
+applyStateUpdate := (ctx: BuildContext, update: CompileStateUpdate): void =>
+    // Add new output files
+    for outFile of update.outFiles
+        ctx.outFiles.add(outFile)
+    
+    // Merge new hashes
+    Object.assign(ctx.newHashes, update.newHashes)
     
     // Remove deleted files
     for file of update.filesToDelete
-        newCtx.outFiles.delete(file)
+        ctx.outFiles.delete(file)
     
     // Remove hash entries if specified
     if update.hashesToDelete
         for file of update.hashesToDelete
             // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Safe: Record cleanup
-            delete newCtx.prevHashes[file]
+            delete ctx.prevHashes[file]
             // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Safe: Record cleanup
-            delete newCtx.newHashes[file]
-    
-    return newCtx
+            delete ctx.newHashes[file]
 
 // Computes the deterministic build signature shared by all build paths.
 // This centralises the formula so changes happen in one place.
@@ -284,6 +282,10 @@ export writeOutputAndGetResult := async (
     expectedOut := fileToOutFile(file, isTsx)
     codeOut .= code
     
+    // Inject @ts-nocheck header when compiling to JavaScript mode (parseOptions.js = true)
+    if ctx.parseOpts?.js
+        codeOut = "// @ts-nocheck\n" + codeOut
+    
     // Note: .civet imports are already rewritten in the engine
     
     mapFile := expectedOut + ".map"
@@ -367,7 +369,7 @@ export compileSource := async (ctx: BuildContext, file: string): Promise<Compile
 
     compileOptions := {
         filename: file,
-        sourceMap: needMap,
+        ...(needMap ? { sourceMap: true } : {}),
         ...(parseOpts ? { parseOptions: parseOpts } : {})
     }
 
@@ -440,7 +442,8 @@ addVscodeExcludes := async (ctx: BuildContext) =>
     , {})
 
     newExclude := if ctx.opts.vscodeHide
-        dynamic := files.reduce((acc: Record<string, boolean>, f: string) => ({ ...acc, [f]: true }), {})
+        // Normalize paths to POSIX for cross-platform .vscode/settings.json
+        dynamic := files.reduce((acc: Record<string, boolean>, f: string) => ({ ...acc, [toPosix(f)]: true }), {})
         dynamic[tmpGlob] = true
         { 
           ...manual, 
@@ -451,8 +454,8 @@ addVscodeExcludes := async (ctx: BuildContext) =>
         // When disabled, remove all managed entries
         manual
 
-    // Store managed files metadata separately
-    managedMetadata := if ctx.opts.vscodeHide then files else undefined
+    // Store managed files metadata separately (normalized to POSIX)
+    managedMetadata := if ctx.opts.vscodeHide then files.map(toPosix) else undefined
 
     edits := jsoncModify(content, [configKey], newExclude, { formattingOptions: { insertSpaces: true, tabSize: 2 } })
     newContent .= jsoncApplyEdits(content, edits)
@@ -497,8 +500,9 @@ addGitignoreEntries := async (ctx: BuildContext) =>
         nonManagedLines.pop()
     
     // Create the new managed block, sorted for determinism
+    // Normalize paths to POSIX for cross-platform .gitignore
     managedBlock := if ctx.opts.gitIgnore
-        [startMarker, ...[...ctx.outFiles].sort(), endMarker].join('\n')
+        [startMarker, ...[...ctx.outFiles].map(toPosix).sort(), endMarker].join('\n')
     else
         ""
 
@@ -547,8 +551,15 @@ runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
     // Load Civet config once and cache its parseOptions for the whole build run
     configPath := await findCivetConfig(cwd)
     configContent := (configPath and await fs.pathExists(configPath)) ? await fs.readFile(configPath, "utf8") : ""
-    civetConfig := (configPath? ? await loadCivetConfig(configPath) : {}) || {}
-    cachedParseOpts := civetConfig?.parseOptions
+    
+    // Parse config content directly to avoid potential caching issues in loadCivetConfig
+    // This is critical for tests that modify config and expect an immediate change.
+    cachedParseOpts := if configContent
+        errors: ParseError[] .= []
+        tree := jsoncParseTree(configContent, errors)
+        if tree then jsoncGetNodeValue(tree) else {}
+    else
+        {}
 
     { prevGenerated, prevHashes } := await loadPrevState(cwd)
     ctx: BuildContext .=
@@ -559,7 +570,7 @@ runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
         prevGenerated: prevGenerated,
         prevHashes: prevHashes,
         newHashes: {},
-        parseOpts: cachedParseOpts,
+        parseOpts: cachedParseOpts?.parseOptions,
         configContent: configContent
 
     // Create the build engine which orchestrates compilation.
@@ -589,8 +600,8 @@ runBuild := async (cwd: string, opts: Options, throwOnError: boolean = true) =>
             spinner.fail(c.red(`Error compiling ${res.file}`) + ` (stub written to ${c.yellow(res.outFile)})`)
             console.error(formatErrorForDisplay(res.error))
         
-        // Apply state update to context
-        ctx = applyStateUpdate(ctx, stateUpdate)
+        // Apply state update to context (mutates ctx in place)
+        applyStateUpdate(ctx, stateUpdate)
     }
     
     finalMessage .= `Built ${builtCount} file(s)`
@@ -740,7 +751,7 @@ if !(global as CivetmanGlobal).__civetman_sigint_handler_registered
 
 // Helper to add all watch-event listeners to a chokidar watcher instance
 attachWatchHandlers := (watcher: FSWatcher, 
-                        ctx: BuildContext, 
+                        ctx: BuildContext,  // This ctx will be mutated
                         cwd: string, 
                         saveStateAndSync: () => void, 
                         engine: BuildEngine) ->
@@ -776,8 +787,8 @@ attachWatchHandlers := (watcher: FSWatcher,
                 console.error(c.red("  ✗ Error compiling " + c.cyan(result.file)) + ` (stub written to ${c.yellow(result.outFile)})`)
                 console.error(formatErrorForDisplay(result.error))
             
-            // Apply state update to context
-            ctx = applyStateUpdate(ctx, stateUpdate)
+            // Apply state update to context (mutates ctx in place)
+            applyStateUpdate(ctx, stateUpdate)
             
             // Immediately refresh VS Code excludes to minimise flicker
             await addVscodeExcludes(ctx)
@@ -832,8 +843,8 @@ attachWatchHandlers := (watcher: FSWatcher,
             catch (err: unknown) 
                 logDebug("[WATCHER_UNLINK] Failed to delete stale file.", { fileToDelete, err })
 
-        // Apply the state changes
-        ctx = applyStateUpdate(ctx, update)
+        // Apply the state changes (mutates ctx in place)
+        applyStateUpdate(ctx, update)
         saveStateAndSync()
 
 // ---------------- watch mode ----------------

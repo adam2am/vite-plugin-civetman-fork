@@ -6,20 +6,20 @@ if (!node_worker_threads.parentPort) {
   throw new Error("Must be run as a worker thread.");
 }
 node_worker_threads.parentPort.on("message", async (msg) => {
-  const { file, content: incoming, isTsx, parseOpts } = msg;
-  let content = incoming;
+  const { file, content: initialContent, isTsx, wantMap, parseOpts } = msg;
   try {
-    if (content == null) {
-      content = await fs.readFile(file, "utf8");
-    }
-    const compileOptions = { filename: file, sourceMap: true };
-    if (parseOpts)
-      compileOptions.parseOptions = parseOpts;
-    const { code, sourceMap } = await civet.compile(content, compileOptions);
+    const content = initialContent != null ? initialContent : await fs.readFile(file, "utf8");
+    const compileOptions = {
+      filename: file,
+      sourceMap: wantMap,
+      ...(parseOpts ? { parseOptions: parseOpts } : {})
+    };
+    const rawResult = await civet.compile(content, compileOptions);
+    const result = typeof rawResult === 'string' ? { code: rawResult } : rawResult;
+    const { code, sourceMap } = result;
     const outFile = file.replace(".civet", isTsx ? ".tsx" : ".ts");
-    const mapJson = sourceMap.json(file, outFile);
-    const plainMap = JSON.parse(JSON.stringify(mapJson));
-    return node_worker_threads.parentPort.postMessage({ ok: true, code, mapJson: plainMap });
+    const mapJson = wantMap && sourceMap ? sourceMap.json(file, outFile) : null;
+    return node_worker_threads.parentPort.postMessage({ ok: true, code, mapJson });
   } catch (error) {
     return node_worker_threads.parentPort.postMessage({ ok: false, error: String(error) });
   }

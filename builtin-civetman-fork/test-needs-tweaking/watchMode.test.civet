@@ -99,3 +99,25 @@ describe "Civetman Watch – basic rebuild", ->
         content2 := await fs.readFile(tsPath, 'utf8')
         expect(content2.includes("const a: number = 2")).toBe(true)
     , 25000) // Increased timeout for slow CI
+
+    it("should update .gitignore when a new file is added", async ->
+        // 1) Get initial gitignore content
+        gitignorePath := path.join(testDir, ".gitignore")
+        initialGitignore := await fs.readFile(gitignorePath, 'utf8')
+        expect(initialGitignore.includes("new-file.ts")).toBe(false)
+        
+        // 2) Add a new file
+        newCivetFile := path.join(testDir, "new-file.civet")
+        newTsFile := path.join(testDir, "new-file.ts")
+        await fs.writeFile(newCivetFile, "export const newContent = 123")
+        
+        // 3) Wait for it to be built
+        await waitFor("✓ new-file.civet -> new-file.ts", 15000)
+        expect(await fs.pathExists(newTsFile)).toBe(true)
+        
+        // 4) Check gitignore again - wait for debounced sync
+        await new Promise((resolve) => setTimeout(resolve, 1000))
+        finalGitignore := await fs.readFile(gitignorePath, 'utf8')
+        
+        expect(finalGitignore.includes("new-file.ts")).toBe(true)
+    , 25000)

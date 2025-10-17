@@ -19,7 +19,7 @@ pp.on "message", async (msg: CompileWorkerPayload) =>
         // Use provided content when available to avoid an extra disk read.
         content := if initial? then initial else await fs.readFile(file, "utf8")
         // Perform the compilation.
-        compileOptions := { filename: file, sourceMap: wantMap, ...(parseOpts ? { parseOptions: parseOpts } : {}) }
+        compileOptions := { filename: file, ...(wantMap ? { sourceMap: true } : {}), ...(parseOpts ? { parseOptions: parseOpts } : {}) }
         rawResult := await compile(content, compileOptions)
         result: CivetCompileResult := typeof rawResult === 'string' 
             ? { code: rawResult } 

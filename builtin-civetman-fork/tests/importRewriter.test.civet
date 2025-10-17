@@ -4,10 +4,11 @@ import { rewriteCivetImports, findAllImports } from '../src/import-rewriter.cive
 describe 'Import Rewriter', () ->
   describe 'findAllImports', () ->
     it 'should find single-line imports with .civet', ->
-      code := 'import { foo } from "./module.civet";'
+      ext := '.civet'
+      code := `import { foo } from "./module${ext}";`
       imports := findAllImports(code)
-      expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./module") // Civet compiler strips .civet extension
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./module.civet")
       expect(imports[0].type).toBe("from")
 
     it 'should find multi-line imports', ->
@@ -15,21 +16,23 @@ describe 'Import Rewriter', () ->
         foo,
         bar
       } from './module'`
-      imports := findAllImports(code)
-      expect(imports.length).toBe(1)
+      imports := findAllImports(code) 
+      expect(imports).toHaveLength(1)
       expect(imports[0].spec).toBe('./module')
 
     it 'should find type-only imports', ->
-      code := 'import type { Foo } from "./types.civet";'
+      ext := '.civet'
+      code := `import type { Foo } from "./types${ext}";`
       imports := findAllImports(code)
-      expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./types") // Civet compiler strips .civet extension
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./types.civet")
 
     it 'should handle single quotes', ->
-      code := "import { foo } from './module.civet';"
+      ext := '.civet'
+      code := `import { foo } from './module${ext}';`
       imports := findAllImports(code)
-      expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./module") // Civet compiler strips .civet extension
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./module.civet")
 
     it 'should handle unquoted imports', ->
       code := "import { foo } from ./module" // Civet would likely fail to compile this, but as a unit test...
@@ -38,46 +41,54 @@ describe 'Import Rewriter', () ->
 
     it 'should ignore non-.civet imports', ->
       code := 'import { foo } from "./module.ts"\nimport { bar } from "external"'
-      imports := findAllImports(code)
-      expect(imports.length).toBe(2)
+      imports := findAllImports(code) 
+      expect(imports).toHaveLength(2)
       expect(imports[0].spec).toBe("./module.ts")
       expect(imports[1].spec).toBe("external")
 
     it 'should handle side-effect imports', ->
-      code := 'import "./module.civet";'
+      ext := '.civet'
+      code := `import "./module${ext}";`
       imports := findAllImports(code)
-      expect(imports.length).toBe(1)
-      expect(imports[0].spec).toBe("./module") // Civet compiler strips .civet extension
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./module.civet")
       expect(imports[0].type).toBe("side-effect")
 
   describe 'rewriteCivetImports', () ->
     it 'should rewrite single .civet import', ->
-      input := 'import { foo } from "./module.civet"'
+      ext := '.civet'
+      input := `import { foo } from "./module${ext}"`
       result := rewriteCivetImports(input)
       expect(result).toBe('import { foo } from "./module"')
 
     it 'should rewrite multiple .civet imports', ->
-      input := `import { foo } from "./module.civet"
-import { bar } from "./other.civet"`
+      ext := '.civet'
+      input := `import { foo } from "./module${ext}"
+import { bar } from "./other${ext}"`
       result := rewriteCivetImports(input)
       expected := `import { foo } from "./module"
 import { bar } from "./other"`
       expect(result).toBe(expected)
 
     it 'should preserve single quotes', ->
-      input := "import { foo } from './module.civet'"
+      ext := '.civet'
+      input := `import { foo } from './module${ext}'`
       result := rewriteCivetImports(input)
       expect(result).toBe("import { foo } from './module'")
 
-    it 'should preserve unquoted imports', ->
-      input := "import { foo } from ./module.civet"
+    it 'should not rewrite unquoted import specifiers', ->
+      ext := '.civet'
+      input := `import { foo } from ./module${ext}`
       result := rewriteCivetImports(input)
-      expect(result).toBe("import { foo } from ./module.civet")
+      // The rewriter should only target quoted strings. It correctly ignores
+      // unquoted specifiers, so the input should be returned unchanged.
+      expect(result).toBe(input)
 
     it 'should not touch non-.civet imports', ->
+      ext := '.civet'
       input := `import { foo } from "./module.ts"
 import { bar } from "external"
-import { baz } from "./module.civet"`
+import { baz } from "./module${ext}"`
       result := rewriteCivetImports(input)
       expected := `import { foo } from "./module.ts"
 import { bar } from "external"
@@ -85,9 +96,10 @@ import { baz } from "./module"`
       expect(result).toBe(expected)
 
     it 'should handle mixed import types', ->
-      input := `import type { Foo } from "./types.civet"
-import { bar } from "./module.civet"
-import "./side-effect.civet"`
+      ext := '.civet'
+      input := `import type { Foo } from "./types${ext}"
+import { bar } from "./module${ext}"
+import "./side-effect${ext}"`
       result := rewriteCivetImports(input)
       expected := `import type { Foo } from "./types"
 import { bar } from "./module"
@@ -95,11 +107,12 @@ import "./side-effect"`
       expect(result).toBe(expected)
 
     it 'should handle complex multi-line imports', ->
+      ext := '.civet'
       input := `import {
         foo,
         bar,
         type Baz
-      } from "./complex.civet"`
+      } from "./complex${ext}"`
       result := rewriteCivetImports(input)
       expected := `import {
         foo,
@@ -109,12 +122,14 @@ import "./side-effect"`
       expect(result).toBe(expected)
 
     it 'should handle relative paths with ../', ->
-      input := 'import { foo } from "../parent/module.civet"'
+      ext := '.civet'
+      input := `import { foo } from "../parent/module${ext}"`
       result := rewriteCivetImports(input)
       expect(result).toBe('import { foo } from "../parent/module"')
 
     it 'should handle absolute paths', ->
-      input := 'import { foo } from "/absolute/path/module.civet"'
+      ext := '.civet'
+      input := `import { foo } from "/absolute/path/module${ext}"`
       result := rewriteCivetImports(input)
       expect(result).toBe('import { foo } from "/absolute/path/module"')
 
@@ -135,12 +150,14 @@ console.log(foo)`
       expect(result).toBe(input)
 
     it 'should handle nested .civet in path', ->
-      input := 'import { foo } from "./civet-folder/module.civet"'
+      ext := '.civet'
+      input := `import { foo } from "./civet-folder/module${ext}"`
       result := rewriteCivetImports(input)
       expect(result).toBe('import { foo } from "./civet-folder/module"')
 
     it 'should not affect .civet in middle of path', ->
-      input := 'import { foo } from "./civet-folder.civet/module.ts"'
+      ext := '.civet'
+      input := `import { foo } from "./civet-folder${ext}/module.ts"`
       result := rewriteCivetImports(input)
       expect(result).toBe('import { foo } from "./civet-folder.civet/module.ts"')
     return
