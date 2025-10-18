@@ -1,19 +1,14 @@
-// --------------------------------------------------------------------
-// jsonl-helpers.civet – Helpers for reading/writing JSON-Lines files and other fs-utils
-// --------------------------------------------------------------------
+// ──────────────────────────────────────────────────────────────
+// File system utilities – Atomic writes and temp file cleanup
+// ──────────────────────────────────────────────────────────────
+
 fs from "fs-extra"
 path from "node:path"
 { randomUUID } from "node:crypto"
 glob from "fast-glob"
 
-// Import logDebug - assuming it's exported from main or a utils file
-// For simplicity, we'll assume it's available or we define a local one.
-// In a real scenario, you'd refactor logDebug into a shared utils file.
-logDebug := (...args: unknown[]) => {
-    // Placeholder if not imported to avoid breaking helpers if used standalone.
-    // In your app, logDebug from main.civet is available.
-    console.log('[DEBUG]', ...args)
-}
+// Import logDebug from utils
+import { logDebug } from "./utils.civet"
 
 // Remove stray *.civetmantmp files that belong to our outputs
 export cleanupTmpFiles := async (cwd: string) =>
@@ -89,4 +84,5 @@ export writeHashesToJSONL :=
             JSON.stringify({ file, ...data })
         )
         content := lines.join('\n') + '\n'
-        await safeWrite(filePath, content) 
+        await safeWrite(filePath, content)
+

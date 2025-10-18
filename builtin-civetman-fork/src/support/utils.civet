@@ -1,0 +1,161 @@
+// ──────────────────────────────────────────────────────────────
+// Pure utility functions with no side effects
+// ──────────────────────────────────────────────────────────────
+
+{ createHash } from "node:crypto"
+path from "node:path"
+{ createRequire } from "node:module"
+import type { CivetStructuredError } from "../types.civet"
+c from "picocolors"
+
+// ------------------------------------------------------------------
+// Global build fingerprint – any change forces full rebuilds
+// ------------------------------------------------------------------
+require := createRequire(import.meta.url)
+export buildFingerprint := JSON.stringify({
+    civetmanVersion: "0.1.0", // bump on release
+    civetCompilerVersion: require("@danielx/civet/package.json").version,
+    nodeMajor: process.version.split(".")[0]
+})
+
+// ------------------------------------------------------------------
+// Pure helper functions
+// ------------------------------------------------------------------
+
+export computeHash := (input: string): string =>
+    createHash("sha256").update(input).digest("hex")
+
+// Computes the deterministic build signature shared by all build paths.
+// This centralises the formula so changes happen in one place.
+export makeSignature := (
+    content: string,
+    opts: { 
+        tsx: boolean, 
+        inlineMap: string | boolean, 
+        mapFiles: boolean, 
+        configContent?: string
+    }
+) : string =>
+    computeHash(
+        content +
+        JSON.stringify({ 
+            tsx: opts.tsx, 
+            inlineMap: opts.inlineMap, 
+            mapFiles: opts.mapFiles, 
+            configContent: opts.configContent ?? "" }) +
+        buildFingerprint
+    )
+
+export fileToOutFile := (file: string, tsx: boolean) =>
+    file.replace(".civet", tsx ? ".tsx" : ".ts")
+
+// Decide ts vs tsx based on CLI options / folder flags
+export resolveOutputType := (ctx: { cwd: string, opts: { tsx: boolean, outTs?: string[], outTsx?: string[] } }, file: string): boolean =>
+    relativeFile := path.relative(ctx.cwd, file)
+
+    findLongestMatch := (dirs: string[]) =>
+        matches := (dirs || []).filter((dir: string) => {
+            normalized := path.normalize(dir)
+            return normalized === '.' || relativeFile.startsWith(normalized + path.sep)
+        })
+        if !matches.length return null
+        matches.sort((a,b) => b.length - a.length)[0]
+
+    tsxMatch := findLongestMatch(ctx.opts.outTsx ? ctx.opts.outTsx : [])
+    tsMatch  := findLongestMatch(ctx.opts.outTs  ? ctx.opts.outTs  : [])
+    if tsxMatch && tsMatch
+        return tsxMatch.length >= tsMatch.length
+    if tsxMatch return true
+    if tsMatch  return false
+    return ctx.opts.tsx
+
+// Convert OS-specific paths (with backslashes) to POSIX style for glob libs/micromatch
+export toPosix := (p: string): string => p.split(path.sep).join("/")
+
+// Helper to determine which paths/globs to use for build & watch
+export getSourcePaths := (opts: { onlyFolders?: string[] }, cwd: string) =>
+    hasOnly := opts.onlyFolders and opts.onlyFolders.length > 0
+    
+    // If --only-folders is used, target those folders specifically.
+    if hasOnly
+        // Globs for `fast-glob` need the `**/*.civet` suffix.
+        globPatterns := (opts.onlyFolders ?? []).map((p) => path.join(p, '**', '*.civet'))
+        // Paths for `chokidar` should just be the directories themselves.
+        watchPaths := (opts.onlyFolders ?? [])
+        return { globPatterns, watchPaths }
+    
+    // Otherwise, default to searching the entire project directory.
+    return { 
+        globPatterns: ['**/*.civet'], 
+        watchPaths: [cwd] 
+    }
+
+export collectDirs := (val: string, prev: string[]) =>
+    // Accept comma-separated lists or repeatable flags.
+    prev.concat(
+        val.split(",")
+            .map((s: string) => s.trim())
+            .filter((s): s is string => !!s)
+    )
+
+// ---------------- debug ----------------
+// Debug logging – enable by setting CIVETMAN_DEBUG env var.
+//   CIVETMAN_DEBUG="*"     → log every category
+//   CIVETMAN_DEBUG="WATCHER,COMPILE" → log only those containing this substring (case-insensitive)
+
+debugEnv := process.env.CIVETMAN_DEBUG
+outputDebug := !!debugEnv
+debugFilters := if debugEnv? and debugEnv != "*" and debugEnv.toLowerCase() != "all"
+    new Set(debugEnv.split(",").map((s: string) => s.trim().toUpperCase()).filter((s) => !!s))
+else
+    null
+
+export logDebug := (...args: unknown[]) =>
+    if !outputDebug return
+    tag := typeof args[0] == "string" ? args[0].toUpperCase() : ""
+    if debugFilters? and ![...debugFilters].some((f) => tag.includes(f))
+        return
+    console.log("[civetman-debug]", ...args)
+
+// Helper to format compile errors for cleaner console output
+export formatErrorForDisplay := (error: unknown): string =>
+    err := error as CivetStructuredError
+    if error? and err.filename? and err.line? and err.column? and err.header?
+        // This is a structured Civet compile error
+        message .= `  ${c.gray(err.filename)}:${c.yellow(err.line)}:${c.yellow(err.column)} - ${c.red(err.header)}`
+        // The "Found:" part is the most useful piece of the verbose error body.
+        bodyStr := String(err.body or err.message or '')
+        // Use a multiline-aware regex to find "Found:" at the start of a line.
+        foundMatch := bodyStr.match(/^Found: (.*)/m)
+        if foundMatch and foundMatch[1]
+            message += ` (Found: ${c.yellow(foundMatch[1].trim())})`
+        return message
+    else if error instanceof Error
+        // Standard JS error
+        return `  ${c.red(error.message)}`
+    else
+        // Fallback for unknown errors
+        return `  ${c.red(String(error))}`
+
+// Debounce helper – immediate execution on first call (leading) and one batched tail call.
+export debounce := <T extends unknown[]>(func: (...args: T) => void, timeout = 1000) ->
+    timer: NodeJS.Timeout | null .= null
+    pendingArgs: T | null .= null
+    (...args: T) ->
+        logDebug("[DEBOUNCE] Debounce invoked", args)
+        if !timer?
+            // Leading edge – fire immediately
+            logDebug("[DEBOUNCE] Leading call executed")
+            func(...args)
+            // Start timer for potential trailing call
+            timer = setTimeout (->
+                if pendingArgs?
+                    logDebug("[DEBOUNCE] Trailing batched call executed")
+                    func(...pendingArgs)
+                timer = null
+                pendingArgs = null
+            ), timeout
+        else
+            // While timer active, update the pending args for a single trailing call
+            pendingArgs = args
+

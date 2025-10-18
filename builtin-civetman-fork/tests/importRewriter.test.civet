@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rewriteCivetImports, findAllImports } from '../src/import-rewriter.civet'
+import { rewriteCivetImports, findAllImports } from '../src/support/import-rewriter.civet'
 
 describe 'Import Rewriter', () ->
   describe 'findAllImports', () ->

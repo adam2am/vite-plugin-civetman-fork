@@ -4,8 +4,7 @@
 import { Worker } from "node:worker_threads"
 import os from "node:os"
 import fs from "fs-extra"
-import { fileURLToPath } from "node:url"
-import type { CompileWorkerPayload, CompileWorkerResult } from "./types.civet"
+import type { CompileWorkerPayload, CompileWorkerResult } from "../types.civet"
 
 logDebug := (...args: unknown[]) => {
     // Placeholder if not imported to avoid breaking helpers if used standalone.
@@ -13,24 +12,23 @@ logDebug := (...args: unknown[]) => {
     console.log('[DEBUG]', ...args)
 }
 
-// Resolve worker script path in an ESM-safe way
-workerScriptPath := fileURLToPath(new URL('./workers/compileWorker.cjs', import.meta.url))
-
 // A very small pool implementation – good enough for our compile workers.
 export class WorkerPool
+    workerScriptPath: string
     size: number
     idle: Worker[]
     pending: { resolve: (w: Worker) => void, reject: (err: Error) => void }[]
     totalWorkers: number
     poolAvailable: boolean
 
-    constructor(size = Math.max(1, os.cpus()?.length || 2))
+    constructor(workerScriptPath: string, size = Math.max(1, os.cpus()?.length || 2))
+        @workerScriptPath = workerScriptPath
         @size = size
         @idle = []
         @pending = []
         @totalWorkers = 0
         // Do a synchronous existence check to guarantee immediate result
-        @poolAvailable = fs.pathExistsSync(workerScriptPath)
+        @poolAvailable = fs.pathExistsSync(@workerScriptPath)
     
     // async check no longer needed – kept for backwards compatibility (noop)
     async checkWorkerScript()
@@ -47,7 +45,7 @@ export class WorkerPool
                     reject(new Error("Worker pool state corrupted: idle array was empty despite length check"))
                 }
             else if (@totalWorkers < @size)
-                worker := new Worker(workerScriptPath)
+                worker := new Worker(@workerScriptPath)
                 @totalWorkers++
                 // Auto-remove workers that exit unexpectedly to keep the pool healthy.
                 worker.on "exit", (code) =>

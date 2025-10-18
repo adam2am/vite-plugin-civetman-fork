@@ -1,0 +1,81 @@
+// ──────────────────────────────────────────────────────────────
+// Configuration layer – Types, defaults, and config loading
+// ──────────────────────────────────────────────────────────────
+
+fs from "fs-extra"
+os from "node:os"
+import type { CivetParseOptions } from "../types.civet"
+import type { ParseError } from "jsonc-parser"
+{ parseTree as jsoncParseTree, getNodeValue as jsoncGetNodeValue } from "jsonc-parser"
+{ findConfig as findCivetConfig } from "@danielx/civet/config"
+
+// ──────────────────────────────────────────────────────────────
+// Types & defaults                                                
+// ──────────────────────────────────────────────────────────────
+
+export type Options =
+    tsx: boolean,
+    gitIgnore: boolean,
+    vscodeHide: boolean,
+    inlineMap: "full" | "fileurl" | "none",
+    mapFiles: boolean,
+    outTs?: string[],      // folders
+    outTsx?: string[],
+    ignoreFolders?: string[], // folders to completely ignore
+    onlyFolders?: string[], // folders to exclusively build/watch
+    concurrency?: number,
+    forcePolling?: boolean,
+    typeCheck?: boolean,
+    force?: boolean
+
+// A central object that holds all mutable state. Tests can mock it easily.
+export type BuildContext =
+    opts: Options,
+    cwd: string,
+    // list of civet source files (fixed for single build run)
+    sources: string[],
+    // outputs produced in this run
+    outFiles: Set<string>,
+    // previous manifest data (for pruning)
+    prevGenerated: Set<string>,
+    // previous content hashes for incremental builds
+    prevHashes: Record<string, { sig: string, outFile: string }>,
+    // new hashes produced this run
+    newHashes: Record<string, { sig: string, outFile: string }>,
+    // cached Civet parseOptions loaded once per build run
+    parseOpts?: CivetParseOptions,
+    // cached Civet config file content loaded once per run
+    configContent: string
+
+export defaultOpts: Options :=
+    tsx: false,
+    gitIgnore: true,
+    vscodeHide: true,
+    inlineMap: "full",
+    mapFiles: false,
+    ignoreFolders: [],
+    onlyFolders: [],
+    concurrency: Math.min(2, (os.cpus()?.length || 2)),
+    forcePolling: false,
+    typeCheck: false,
+    force: false
+
+// Load Civet config from the project directory
+export loadCivetConfigContent := async (cwd: string): Promise<{ configContent: string, parseOpts?: CivetParseOptions }> =>
+    configPath := await findCivetConfig(cwd)
+    configContent := (configPath and await fs.pathExists(configPath)) ? await fs.readFile(configPath, "utf8") : ""
+    
+    // Parse config content directly to avoid potential caching issues in loadCivetConfig
+    // This is critical for tests that modify config and expect an immediate change.
+    cachedParseOpts := if configContent
+        errors: ParseError[] .= []
+        // Parse the config and immediately sanitize it to a plain JSON object.
+        // This prevents non-serializable data (like functions) from ever
+        // entering our build context, fixing DataCloneError in worker threads.
+        tree := jsoncParseTree(configContent, errors, { allowTrailingComma: true })
+        if tree then JSON.parse(JSON.stringify(jsoncGetNodeValue(tree) || {})) else {}
+    else
+        {}
+    
+    return { configContent, parseOpts: cachedParseOpts?.parseOptions }
+

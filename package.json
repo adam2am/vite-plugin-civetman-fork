@@ -33,7 +33,8 @@
   "scripts": {
     "build:cli": "bunx vite build builtin-civetman-fork --config builtin-civetman-fork/vite.config.cli.ts",
     "build:tsup": "tsup",
-    "build": "bun run build:cli && npm run build:tsup && mkdir -p dist/cli && cp builtin-civetman-fork/dist/index.js dist/cli/index.js && cp -R builtin-civetman-fork/dist/workers dist/cli/",
+    "build": "bun run build:cli && bun run build:tsup && node scripts/postbuild.mjs",
+    "pretest": "bun run build",
     "dev": "bunx vite --config vite.config.cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",

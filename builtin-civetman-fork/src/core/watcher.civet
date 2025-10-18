@@ -1,0 +1,190 @@
+// ──────────────────────────────────────────────────────────────
+// Watcher layer – File watching with chokidar
+// ──────────────────────────────────────────────────────────────
+
+chokidar from "chokidar"
+import type { FSWatcher } from "chokidar"
+fs from "fs-extra"
+path from "node:path"
+os from "node:os"
+micromatch from "micromatch"
+c from "picocolors"
+import type { Options, BuildContext } from "../support/config.civet"
+import type { BuildEngine } from "./engine.civet"
+import { getSourcePaths, toPosix, logDebug } from "../support/utils.civet"
+import { logWatchEventBuilt, logWatchEventError, logWatchReady } from "../cli/ui.civet"
+import { applyStateUpdate } from "./state.civet"
+import { addVscodeExcludes } from "../support/integrations.civet"
+import { cleanupTmpFiles } from "../support/fs.civet"
+import { saveNewState } from "./state.civet"
+
+// Create a chokidar watcher instance
+export createWatcher := (cwd: string, opts: Options) ->
+    // Polling by default only in CI; can be overridden via --force-polling.
+    usePolling := opts.forcePolling || !!process.env.CI
+    // Build ignore patterns (same logic as build step)
+    baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
+    userIgnores := (opts.ignoreFolders || []).map((d: string) => path.join(d, "**"))
+    ignorePatterns := [...baseIgnores, ...userIgnores].map(toPosix)
+
+    { watchPaths } := getSourcePaths(opts, cwd)
+    // Case-insensitive matcher using micromatch
+    ignoreFn := (abs: string) =>
+        rel := path.relative(cwd, abs)
+        micromatch.isMatch(rel, ignorePatterns, nocase: true)
+
+    chokidar.watch(watchPaths, {
+        ignored: ignoreFn,
+        persistent: true,
+        ignoreInitial: true,
+        usePolling: usePolling,
+        interval: 100,
+        binaryInterval: 300,
+        awaitWriteFinish: {
+            stabilityThreshold: 100,
+            pollInterval: 100
+        }
+    })
+
+// ---------------- global watcher registry to avoid duplicate SIGINT logs ----------------
+
+// Define a type for our custom global properties to avoid `as any`.
+interface WatchBundle {
+    watcher: FSWatcher
+    ctx: BuildContext
+}
+
+interface CivetmanGlobal extends NodeJS.Global {
+    __civetman_watch_bundles?: Set<WatchBundle>
+    __civetman_sigint_handler_registered?: boolean
+}
+
+activeWatchBundles := (global as CivetmanGlobal).__civetman_watch_bundles ?? new Set<WatchBundle>()
+(global as CivetmanGlobal).__civetman_watch_bundles = activeWatchBundles
+
+if !(global as CivetmanGlobal).__civetman_sigint_handler_registered
+    (global as CivetmanGlobal).__civetman_sigint_handler_registered = true
+    process.on "SIGINT", async =>
+        // Gracefully close all active watchers and persist state exactly once
+        for entry of activeWatchBundles
+            try
+                await entry.watcher.close()
+                ctxObj := entry.ctx
+                ctxObj.prevHashes = { ...ctxObj.prevHashes, ...ctxObj.newHashes }
+                ctxObj.newHashes = {}
+                await saveNewState(ctxObj)
+            catch (err: unknown)
+                logDebug("[SIGINT] Error during graceful shutdown.", err)
+                continue
+        // Print shutdown message only once across all processes using a tmp-file lock
+        onceFile := path.join(os.tmpdir(), "civetman_watch_stop_once")
+        shouldLog .= true
+        try
+            fs.writeFileSync(onceFile, process.pid.toString(), { flag: 'wx' })
+        catch (err: unknown)
+            logDebug("[SIGINT] Failed to write stop signal file:", err)
+            shouldLog = false
+        if shouldLog
+            console.log("\nCivetman watch stopped (CLI).")
+        process.exit()
+
+// Register this watcher for global cleanup
+export registerWatcher := (watcher: FSWatcher, ctx: BuildContext) =>
+    activeWatchBundles.add({ watcher, ctx })
+
+// Helper to add all watch-event listeners to a chokidar watcher instance
+export attachWatchHandlers := (watcher: FSWatcher, 
+                        ctx: BuildContext,  // This ctx will be mutated
+                        cwd: string, 
+                        saveStateAndSync: () => void, 
+                        engine: BuildEngine) ->
+    timers: Map<string, NodeJS.Timeout> := new Map()
+    scheduleRebuild := (file: string) =>
+        existingTimer := timers.get(file)
+        if existingTimer
+            clearTimeout(existingTimer)
+        timers.set(file, setTimeout(() =>
+            timers.delete(file)
+            compileNow(file)
+        , 100))
+
+    compileNow := async (file: string) =>
+        // Clean up any stray temp files before compiling
+        await cleanupTmpFiles(cwd)
+        
+        // Ensure we read the latest file contents; drop any cached entry
+        if engine.contentCache? and engine.contentCache.delete?
+            engine.contentCache.delete(file)
+        
+        try
+            { result, stateUpdate } := await engine.buildWithStateUpdate(file)
+            
+            if result.status == 'built'
+                logDebug("[REBUILD_ONE] Built", file, "->", result.outFile)
+                logWatchEventBuilt(result.file, result.outFile)
+            else if result.status == 'skip'
+                logDebug("[REBUILD_ONE] Skipped (up to date)", file)
+            else if result.status == 'error'
+                logDebug("[REBUILD_ONE] Error compiling", file, result.error)
+                logWatchEventError(result.file, result.outFile, result.error)
+            
+            // Apply state update to context (mutates ctx in place)
+            applyStateUpdate(ctx, stateUpdate)
+            
+            // Immediately refresh VS Code excludes to minimise flicker
+            await addVscodeExcludes(ctx)
+            
+            saveStateAndSync()
+        catch error
+            logDebug("[REBUILD_ONE] Unexpected error", file, error)
+            console.error(c.red("  ✗ Unexpected error compiling " + c.cyan(file)), error)
+
+    watcher.on 'ready', ->
+        logDebug("[WATCHER] Initial scan complete and ready for changes")
+        logDebug("[WATCHER] Watched paths:", watcher.getWatched())
+        logWatchReady()
+
+    watcher.on 'all', (event: string, changedPath: string) ->
+        if !changedPath.endsWith('.civet') return // only care about civet files
+        logDebug("[WATCHER] Event:", event, "on path:", changedPath)
+
+    watcher.on 'error', (err: unknown) ->
+        logDebug("[WATCHER] Error in watcher:", err)
+
+    watcher.on "add", (abs: string) ->
+        // Only react to source .civet files – ignore generated outputs
+        unless abs.endsWith('.civet') return
+        file := path.relative(cwd, abs)
+        logDebug("[WATCHER_ADD] File added", file)
+        unless ctx.sources.includes(file)
+            ctx.sources.push file
+            logDebug("[WATCHER_ADD] Added to sources list", file)
+        scheduleRebuild(file)
+
+    watcher.on "change", (abs: string) ->
+        unless abs.endsWith('.civet') return
+        file := path.relative(cwd, abs)
+        logDebug("[WATCHER_CHANGE] File changed", file)
+        scheduleRebuild(file)
+
+    watcher.on "unlink", async (abs: string) =>
+        unless abs.endsWith('.civet') return
+        file := path.relative(cwd, abs) 
+        
+        logDebug("[WATCHER_UNLINK] File removed", file)
+        
+        // Engine describes the changes, main loop applies them.
+        update := engine.createRemoveUpdate(file)
+        ctx.sources = ctx.sources.filter((sourceFile: string) => sourceFile !== file)
+
+        // Perform file deletions
+        for fileToDelete of update.filesToDelete
+            try 
+                if await fs.pathExists(fileToDelete) then await fs.unlink(fileToDelete)
+            catch (err: unknown) 
+                logDebug("[WATCHER_UNLINK] Failed to delete stale file.", { fileToDelete, err })
+
+        // Apply the state changes (mutates ctx in place)
+        applyStateUpdate(ctx, update)
+        saveStateAndSync()
+

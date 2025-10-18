@@ -5,21 +5,17 @@
 // --------------------------------------------------------------
 
 fs from "fs-extra"
-{ WorkerPool } from "./workerPool.civet"
+{ WorkerPool } from "../worker/pool.civet"
 { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
-// Import helpers and types from the main module.
-{   writeOutputAndGetResult,
-    resolveOutputType,
-    makeSignature,
-    fileToOutFile,
-    logDebug,
-    type BuildContext 
-} from "./main.civet"
+// Import helpers and types from the refactored modules.
+import { writeOutputAndGetResult } from "./build.civet"
+import { resolveOutputType, makeSignature, fileToOutFile, logDebug } from "../support/utils.civet"
+import type { BuildContext } from "../support/config.civet"
 
 { compile } from "@danielx/civet"
-import { rewriteCivetImports } from "./import-rewriter.civet"
-import type { CompileResult, CivetCompileResult, CompileStateUpdate } from "./types.civet"
+import { rewriteCivetImports } from "../support/import-rewriter.civet"
+import type { CompileResult, CivetCompileResult, CompileStateUpdate } from "../types.civet"
 
 export class BuildEngine
     ctx: BuildContext
@@ -28,10 +24,10 @@ export class BuildEngine
     contentCache: Map<string, string>
     inFlight: Map<string, Promise<CompileResult>>
 
-    constructor(ctx: BuildContext)
+    constructor(ctx: BuildContext, workerScriptPath: string)
         @ctx = ctx
         concurrency := Math.max(1, (@ctx.opts.concurrency ?? 2))
-        @pool = new WorkerPool(concurrency)
+        @pool = new WorkerPool(workerScriptPath, concurrency)
         @inFlight = new Map<string, Promise<CompileResult>>()
         @contentCache = new Map<string, string>()
 
@@ -135,9 +131,8 @@ export class BuildEngine
         if (@ctx.opts.concurrency ?? 2) > 1 and @pool.poolAvailable
             try
                 logDebug("[COMPILE] Compiling with worker", file)
-                // Sanitize parseOpts to ensure it's serializable for the worker thread.
-                serializableParseOpts := parseOpts ? JSON.parse(JSON.stringify(parseOpts)) : null
-                workerResult := await @pool.exec({ file, content, isTsx, wantMap, parseOpts: serializableParseOpts })
+                // parseOpts is pre-sanitized in config.civet to be serializable. No need to re-sanitize.
+                workerResult := await @pool.exec({ file, content, isTsx, wantMap, parseOpts: parseOpts })
                 if workerResult.ok
                     code = rewriteCivetImports(workerResult.code)
                     mapJson = workerResult.mapJson

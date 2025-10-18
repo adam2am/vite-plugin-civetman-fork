@@ -1,0 +1,163 @@
+// ──────────────────────────────────────────────────────────────
+// Build orchestration layer – Core build logic
+// ──────────────────────────────────────────────────────────────
+
+fs from "fs-extra"
+glob from "fast-glob"
+path from "node:path"
+import type { Options, BuildContext } from "../support/config.civet"
+import type { BuildEngine } from "./engine.civet"
+import { BuildEngine as BuildEngineClass } from "./engine.civet"
+import { getSourcePaths, toPosix, logDebug } from "../support/utils.civet"
+import { loadCivetConfigContent } from "../support/config.civet"
+import { loadPrevState, saveNewState, applyStateUpdate, pruneStaleOutputs } from "./state.civet"
+import { syncIDEConfigs } from "../support/integrations.civet"
+import { cleanupTmpFiles } from "../support/fs.civet"
+import { startBuildSpinner, logCompileResult, reportBuildResult } from "../cli/ui.civet"
+
+// Top-level build function that orchestrates the entire build process
+export runBuild := async (cwd: string, opts: Options, workerScriptPath: string, throwOnError: boolean = true): Promise<{ ctx: BuildContext, engine: BuildEngine, hadError: boolean }> =>
+    // Step 0: scrub temp files from previous aborted runs
+    await cleanupTmpFiles(cwd)
+
+    // Step 1: collect source files
+    { globPatterns } := getSourcePaths(opts, cwd)
+    baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
+    userIgnores := (opts.ignoreFolders ?? []).map((d) => path.join(d, "**"))
+    ignorePatterns := [...baseIgnores, ...userIgnores].map(toPosix)
+
+    sources := await glob(globPatterns, ignore: ignorePatterns, cwd: cwd, caseSensitiveMatch: false)
+
+    // Step 2: load previous state and create context
+    // Load Civet config once and cache its parseOptions for the whole build run
+    { configContent, parseOpts } := await loadCivetConfigContent(cwd)
+
+    { prevGenerated, prevHashes } := await loadPrevState(cwd)
+    ctx: BuildContext .=
+        opts: opts,
+        cwd: cwd,
+        sources: sources,
+        outFiles: new Set<string>(),
+        prevGenerated: prevGenerated,
+        prevHashes: prevHashes,
+        newHashes: {},
+        parseOpts: parseOpts,
+        configContent: configContent
+
+    // Create the build engine which orchestrates compilation.
+    engine := new BuildEngineClass(ctx, workerScriptPath)
+
+    // Step 3: build all, with progress reporting
+    spinner := startBuildSpinner()
+    hadError .= false
+    builtCount .= 0
+    skippedCount .= 0
+
+    // Use the new pure approach - get results and state updates
+    { results, stateUpdates } := await engine.buildAllWithStateUpdates()
+    
+    // Process results and apply state updates
+    for (i .= 0; i < results.length; i++) {
+        res := results[i]
+        stateUpdate := stateUpdates[i]
+        
+        if res.status == 'built'
+            builtCount++
+        else if res.status == 'skip'
+            skippedCount++
+        else if res.status == 'error'
+            hadError = true
+        
+        logCompileResult(spinner, res)
+        
+        // Apply state update to context (mutates ctx in place)
+        applyStateUpdate(ctx, stateUpdate)
+    }
+    
+    reportBuildResult(hadError, builtCount, skippedCount)
+
+    // Step 4: prune stale outputs & save new state
+    await pruneStaleOutputs(ctx)
+
+    await saveNewState(ctx)
+
+    // Step 5: IDE / VCS hygiene
+    await syncIDEConfigs(ctx)
+
+    if hadError and throwOnError
+        // ensure worker threads are terminated so the process can exit cleanly
+        if engine?
+            await engine.pool.shutdown()
+        throw new Error("Build failed with errors")
+
+    // Make sure the returned context is up-to-date for watch mode
+    ctx.prevGenerated = new Set([...ctx.outFiles])
+    ctx.prevHashes = { ...ctx.prevHashes, ...ctx.newHashes }
+    ctx.newHashes = {}
+
+    return { ctx, engine, hadError }
+
+// Handles writing the output of a successful compilation to disk.
+// This is used by both the in-process and worker-based compilation paths.
+export writeOutputAndGetResult := async (
+    ctx: BuildContext,
+    file: string,
+    isTsx: boolean,
+    code: string,
+    mapJson: string | null,
+    signature: string
+): Promise<{ status: "built", file: string, outFile: string, signature: string }> =>
+    expectedOut := file.replace(".civet", isTsx ? ".tsx" : ".ts")
+    codeOut .= code
+    
+    // Inject @ts-nocheck header when compiling to JavaScript mode (parseOptions.js = true)
+    if ctx.parseOpts?.js
+        codeOut = "// @ts-nocheck\n" + codeOut
+    
+    // Note: .civet imports are already rewritten in the engine
+    
+    mapFile := expectedOut + ".map"
+
+    if ctx.opts.inlineMap is "full" and mapJson
+        base64Map := Buffer.from(JSON.stringify(mapJson)).toString("base64")
+        codeOut += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
+
+    if ctx.opts.mapFiles and mapJson
+        await fs.writeFile(mapFile, JSON.stringify(mapJson))
+        ctx.outFiles.add(mapFile)
+
+        if ctx.opts.inlineMap is "fileurl"
+            codeOut += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"
+    
+
+    await fs.writeFile(expectedOut, codeOut)
+    ctx.outFiles.add(expectedOut)
+
+    // --- Cleanup: remove bygone sibling (.ts vs .tsx) to prevent stale duplicates ---
+    siblingOut := file.replace(
+        '.civet',
+        isTsx ? '.ts' : '.tsx'
+    )
+    try
+        if siblingOut != expectedOut && await fs.pathExists(siblingOut)
+            await fs.unlink(siblingOut)
+            ctx.outFiles.delete(siblingOut)
+        if await fs.pathExists(siblingOut + '.map')
+            await fs.unlink(siblingOut + '.map')
+            ctx.outFiles.delete(siblingOut + '.map')
+    catch (err: unknown)
+        logDebug("[WRITE] Best-effort cleanup of sibling file failed.", { siblingOut, err })
+
+    logDebug("built", file)
+    return { status: "built", file, outFile: expectedOut, signature }
+
+// Type-check helper
+export runTscTypeCheck := (cwd: string): Promise<void> =>
+    new Promise (resolve, reject) =>
+        child := require('node:child_process').spawn('npx', ['--yes', 'tsc', '-p', cwd, '--noEmit', '--pretty', 'false'], {
+            cwd: cwd,
+            stdio: 'inherit'
+        })
+        child.on 'close', (code: number) =>
+            if code == 0 then resolve() else reject(new Error("tsc exit code " + code))
+

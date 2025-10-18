@@ -1,0 +1,82 @@
+// ──────────────────────────────────────────────────────────────
+// State management layer – Manifest and hash persistence
+// ──────────────────────────────────────────────────────────────
+
+fs from "fs-extra"
+{ join } from "node:path"
+path from "node:path"
+import { loadHashesFromJSONL, writeHashesToJSONL, safeWrite } from "../support/fs.civet"
+import type { BuildContext } from "../support/config.civet"
+import type { CompileStateUpdate } from "../types.civet"
+import { logDebug } from "../support/utils.civet"
+
+// ---------------- manifest helpers (pure fs) ----------------
+manifestDir := (cwd: string) => join(cwd, ".civetman")
+manifestFile := (cwd: string) => join(manifestDir(cwd), "manifest.json")
+hashManifestFile := (cwd: string) => join(manifestDir(cwd), "hashes.jsonl")
+
+loadJSON := async <T>(file: string, fallback: T): Promise<T> =>
+    if await fs.pathExists(file)
+        try
+            JSON.parse(await fs.readFile(file, "utf8"))
+        catch (err: unknown)
+            logDebug("[JSON] Failed to parse JSON file, using fallback.", { file, err })
+            fallback
+    else
+        fallback
+
+saveJSON := async (file: string, data: unknown) =>
+    await fs.ensureDir(path.dirname(file))
+    await safeWrite(file, JSON.stringify(data, null, 2))
+
+export loadPrevState := async (cwd: string) =>
+    manifestObj := await loadJSON(manifestFile(cwd), { generated: [] })
+    prevGenerated := new Set(manifestObj.generated as string[])
+    prevHashes := await loadHashesFromJSONL(hashManifestFile(cwd))
+    return { prevGenerated, prevHashes }
+
+export saveNewState := async (ctx: BuildContext) =>
+    logDebug("[STATE] Saving new state", { outFiles: [...ctx.outFiles], newHashCount: Object.keys(ctx.newHashes).length })
+    
+    // Save generated file list (still full write, but it's small)
+    await saveJSON(manifestFile(ctx.cwd), { version: 1, generated: [...ctx.outFiles] })
+
+    // Overwrite the hashes file with the full, compacted state.
+    allHashes := { ...ctx.prevHashes, ...ctx.newHashes }
+    await writeHashesToJSONL(hashManifestFile(ctx.cwd), allHashes)
+
+    logDebug("[STATE] State saved successfully")
+
+// Apply state updates to BuildContext (mutates the context object)
+export applyStateUpdate := (ctx: BuildContext, update: CompileStateUpdate): void =>
+    // Add new output files
+    for outFile of update.outFiles
+        ctx.outFiles.add(outFile)
+    
+    // Merge new hashes
+    Object.assign(ctx.newHashes, update.newHashes)
+    
+    // Remove deleted files
+    for file of update.filesToDelete
+        ctx.outFiles.delete(file)
+    
+    // Remove hash entries if specified
+    if update.hashesToDelete
+        for file of update.hashesToDelete
+            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Safe: Record cleanup
+            delete ctx.prevHashes[file]
+            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Safe: Record cleanup
+            delete ctx.newHashes[file]
+
+// Helper to prune stale outputs
+export pruneStaleOutputs := async (ctx: BuildContext) =>
+    stale := [...ctx.prevGenerated].filter((f) => !ctx.outFiles.has(f))
+    for file of stale
+        try
+            if await fs.pathExists(join(ctx.cwd, file))
+                await fs.unlink(join(ctx.cwd, file))
+        catch (err: unknown)
+            logDebug("[PRUNE] Best-effort pruning of stale file failed.", { file, err })
+            continue
+    return
+

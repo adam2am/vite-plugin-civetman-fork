@@ -1,0 +1,124 @@
+// ──────────────────────────────────────────────────────────────
+// CLI entry point – Command-line argument parsing and execution
+// ──────────────────────────────────────────────────────────────
+
+{ program } from "commander"
+import { defaultOpts, type Options } from "../support/config.civet"
+import { collectDirs, logDebug, debounce } from "../support/utils.civet"
+import { runBuild, runTscTypeCheck } from "../core/build.civet"
+import { createWatcher, attachWatchHandlers, registerWatcher } from "../core/watcher.civet"
+import { logBuildFinished, logTypeCheckStart, logTypeCheckPassed, logTypeCheckFailed, logWatchModeStarting, logInitialBuildComplete, logWatchModeFailed } from "./ui.civet"
+import { saveNewState } from "../core/state.civet"
+import { syncIDEConfigs } from "../support/integrations.civet"
+import path from "node:path"
+import fs from "fs-extra"
+
+// CLI command – build
+registerBuildCommand := =>
+    program.command "build"
+        .description "One-shot compile of all .civet files"
+        .action async =>
+            cwd := process.cwd()
+            opts := { ...defaultOpts, ...program.opts<Options>() }
+            // Resolve worker path with ENV override and fallbacks (mutable)
+            workerScriptPath .= process.env.CIVETMAN_WORKER_PATH
+            if !workerScriptPath?
+                // Prefer top-level dist/cli/workers (package consumer)
+                candidate1 := path.resolve(cwd, 'dist', 'cli', 'workers', 'compileWorker.cjs')
+                candidate2 := path.resolve(cwd, 'builtin-civetman-fork', 'dist', 'workers', 'compileWorker.cjs')
+                workerScriptPath = (await fs.pathExists(candidate1)) ? candidate1 : candidate2
+            engine .= null
+            try
+                buildResult := await runBuild(cwd, opts, workerScriptPath, true)
+                engine = buildResult.engine
+                logBuildFinished()
+
+                // Optional post-build type-check
+                if opts.typeCheck
+                    logTypeCheckStart()
+                    try
+                        await runTscTypeCheck(cwd)
+                        logTypeCheckPassed()
+                    catch (err: unknown)
+                        logTypeCheckFailed()
+                        logDebug("[TYPECHECK] Type-check error details:", err)
+                        void (process.exitCode = 1)
+            catch (err: unknown)
+                // runBuild will have already logged details
+                logDebug("[BUILD] Build error details:", err)
+                void (process.exitCode = 1)
+            finally
+                if engine?
+                    await engine.pool.shutdown()
+
+// Watch mode command
+registerDevCommand := =>
+    logDebug("[WatchMode] Registering dev command")
+    devAction := async (): Promise<void> =>
+        logDebug("[WatchMode] Executing dev action")
+        cwd := process.cwd()
+        opts := { ...defaultOpts, ...program.opts<Options>() }
+        // Resolve worker path with ENV override and fallbacks (mutable)
+        workerScriptPath .= process.env.CIVETMAN_WORKER_PATH
+        if !workerScriptPath?
+            candidate1 := path.resolve(cwd, 'dist', 'cli', 'workers', 'compileWorker.cjs')
+            candidate2 := path.resolve(cwd, 'builtin-civetman-fork', 'dist', 'workers', 'compileWorker.cjs')
+            workerScriptPath = (await fs.pathExists(candidate1)) ? candidate1 : candidate2
+        try
+            logWatchModeStarting()
+            { ctx, engine } := await runBuild(cwd, opts, workerScriptPath, false)
+            logInitialBuildComplete()
+            
+            saveStateAndSync := debounce(async =>
+                logDebug("[STATE_SYNC] Starting state sync")
+                ctx.prevHashes = { ...ctx.prevHashes, ...ctx.newHashes }
+                ctx.newHashes = {}
+                await saveNewState(ctx)
+                await syncIDEConfigs(ctx)
+                logDebug("[STATE_SYNC] State sync complete")
+            , 800)
+
+            logDebug("[WATCHER] Setting up watcher in directory:", path.resolve(cwd))
+            watcher := createWatcher(cwd, opts)
+            logDebug("[WATCHER] Watcher instance created:", !!watcher)
+            attachWatchHandlers(
+                watcher, 
+                ctx, 
+                cwd, 
+                saveStateAndSync, 
+                engine)
+            
+            // Register this watcher for global cleanup once
+            registerWatcher(watcher, ctx)
+        catch e
+            logWatchModeFailed(e)
+            process.exitCode = 1
+    program.command "dev"
+        .description "Watch .civet files and rebuild on change"
+        .action devAction
+
+export default () =>
+    // top-level CLI wiring
+    program
+        .name "civetman"
+        .description "Use Civet language in any project – build or watch .civet files"
+        .version "0.1.0"
+        .option("-x, --tsx", "Generate .tsx files instead of .ts", defaultOpts.tsx)
+        .option("--out-ts <dir>", "Directory to emit .ts files (repeatable or comma-separated)", collectDirs, [] as string[])
+        .option("--out-tsx <dir>", "Directory to emit .tsx files (repeatable or comma-separated)", collectDirs, [] as string[])
+        .option("--no-git-ignore", "Disable writing generated files to .gitignore")
+        .option("--no-vscode-hide", "Disable hiding generated files in VS Code")
+        .option("--inline-map <mode>", "Inline source map mode", defaultOpts.inlineMap)
+        .option("--map-files", "Emit external .map files")
+        .option("--concurrency <number>", "Max parallel compilations", (val) => parseInt(val, 10))
+        .option("--force-polling", "Force chokidar polling even outside CI")
+        .option("--ignore-folders <dir>", "Folder(s) to ignore (repeatable or comma-separated)", collectDirs, [] as string[])
+        .option("--only-folders <dir>", "Folder(s) to exclusively build/watch (repeatable or comma-separated)", collectDirs, [] as string[])
+        .option("--type-check", "Run TypeScript type-check (tsc --noEmit) after build")
+        .option("--force", "Force recompilation of all files, ignoring the cache")
+
+    registerBuildCommand()
+    registerDevCommand()
+
+    program.parse(process.argv)
+

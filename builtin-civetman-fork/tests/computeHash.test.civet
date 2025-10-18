@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeHash } from '../src/main.civet'
+import { computeHash } from '../src/support/utils.civet'
 
 describe 'computeHash', ->
   it 'should compute the correct SHA256 hash for a given string', ->

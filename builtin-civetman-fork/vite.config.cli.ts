@@ -7,7 +7,7 @@ export default defineConfig({
     lib: {
       entry: {
         'index': './index.ts',
-        'workers/compileWorker': './src/workers/compileWorker.civet'
+        'workers/compileWorker': './src/worker/compile.worker.civet'
       },
       formats: ["es", "cjs"],
       fileName: (format, entryName) => format === 'es' ? `${entryName}.js` : `${entryName}.cjs`

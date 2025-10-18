@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'fs-extra'
 import os from 'node:os'
 import path from 'node:path'
-import { WorkerPool } from '../src/workerPool.civet'
+import { WorkerPool } from '../src/worker/pool.civet'
 import { fileURLToPath } from 'node:url'
 
 // ESM __dirname polyfill
@@ -15,14 +15,11 @@ makeTempFile := async (dir: string, name: string, content: string) ->
     await fs.writeFile(filePath, content)
     return filePath
 
-// Ensure the src/workers/compileWorker.cjs exists (tests may run before build step compiles it)
-ensureWorkerScript := async () ->
-    srcDir := path.join(__dirname, '..', 'src', 'workers')
-    distWorker := path.join(__dirname, '..', '..', 'dist', 'cli', 'workers', 'compileWorker.cjs')
-    srcWorker := path.join(srcDir, 'compileWorker.cjs')
-    if !(await fs.pathExists(srcWorker)) and await fs.pathExists(distWorker)
-        await fs.ensureDir(srcDir)
-        await fs.copy(distWorker, srcWorker)
+// Resolve compiled worker script path from dist (no copying into src)
+resolveWorkerPath := async () ->
+    // Prefer top-level dist/cli/workers for package run
+    candidate := path.join(__dirname, '..', '..', 'dist', 'cli', 'workers', 'compileWorker.cjs')
+    if await fs.pathExists(candidate) then candidate else candidate
 
 describe "WorkerPool – crash recovery", () =>
     it "should still compile after a worker exits abnormally", async ->
@@ -32,7 +29,8 @@ describe "WorkerPool – crash recovery", () =>
         file1 := await makeTempFile(tmpDir, 'one.civet', 'a: number := 1\nexport {}')
         file2 := await makeTempFile(tmpDir, 'two.civet', 'b: number := 2\nexport {}')
 
-        pool := new WorkerPool(1)
+        workerScriptPath := await resolveWorkerPath()
+        pool := new WorkerPool(workerScriptPath, 1)
 
         // First compile should succeed
         res1 := await pool.exec({ file: file1, content: 'a: number := 1\nexport {}', isTsx: false, wantMap: false })
@@ -69,5 +67,4 @@ describe "WorkerPool – crash recovery", () =>
         await Promise.all(pool.idle.map((w) => w.terminate()))
     , 15000 // timeout
 
-// Run the check immediately so it finishes before tests execute
-await ensureWorkerScript() 
+// Nothing to prepare eagerly anymore; worker path is resolved at runtime

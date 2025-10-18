@@ -1,0 +1,68 @@
+// ──────────────────────────────────────────────────────────────
+// UI layer – Responsible for colours, spinners, and console output
+// ──────────────────────────────────────────────────────────────
+
+c from "picocolors"
+ora from "ora"
+import type { Ora } from "ora"
+import type { CompileResult } from "../types.civet"
+import { formatErrorForDisplay } from "../support/utils.civet"
+
+// Create and start a build spinner
+export startBuildSpinner := (): Ora =>
+    ora(c.blue("Building Civet files")).start()
+
+// Report build result (success or failure)
+export reportBuildResult := (hadError: boolean, builtCount: number, skippedCount: number) =>
+    finalMessage .= `Built ${builtCount} file(s)`
+    if skippedCount > 0
+        finalMessage = `${finalMessage}, ${skippedCount} skipped`
+
+    if !hadError
+        console.log(c.green(`Build complete! ${finalMessage}`))
+    else
+        console.log(c.red(`Build failed. ${finalMessage}`))
+
+// Log a single compilation result
+export logCompileResult := (spinner: Ora, res: CompileResult) =>
+    if res.status == 'built'
+        spinner.succeed(c.cyan(res.file) + " -> " + c.green(res.outFile))
+    else if res.status == 'skip'
+        // Silent for skips
+        return
+    else if res.status == 'error'
+        spinner.fail(c.red(`Error compiling ${res.file}`) + ` (stub written to ${c.yellow(res.outFile)})`)
+        console.error(formatErrorForDisplay(res.error))
+
+// Log watch mode events
+export logWatchEventBuilt := (file: string, outFile: string) =>
+    console.log(c.green('  ✓ ' + c.cyan(file) + " -> " + c.green(outFile)))
+
+export logWatchEventError := (file: string, outFile: string, error: unknown) =>
+    console.error(c.red("  ✗ Error compiling " + c.cyan(file)) + ` (stub written to ${c.yellow(outFile)})`)
+    console.error(formatErrorForDisplay(error))
+
+export logWatchReady := () =>
+    console.log(c.blue("Watching for changes"))
+
+export logInitialBuildComplete := () =>
+    console.log(c.green("Initial build complete! Watching for changes…\n"))
+
+export logBuildFinished := () =>
+    console.log(c.green("\nCivetman finished building!"))
+
+export logTypeCheckStart := () =>
+    console.log(c.blue("Running TypeScript type-check…"))
+
+export logTypeCheckPassed := () =>
+    console.log(c.green("Type-check passed!\n"))
+
+export logTypeCheckFailed := () =>
+    console.error(c.red("Type-check failed. See errors above."))
+
+export logWatchModeStarting := () =>
+    console.log(c.blue("Civetman starts building in watch mode…\n"))
+
+export logWatchModeFailed := (error: unknown) =>
+    console.error(c.red("Watch mode failed"), error)
+

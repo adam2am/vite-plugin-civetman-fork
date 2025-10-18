@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { resolveOutputType, defaultOpts } from '../src/main.civet';
+import { resolveOutputType } from '../src/support/utils.civet';
+import { defaultOpts } from '../src/support/config.civet';
 
 describe('resolveOutputType', () => {
   cwd := '/app';

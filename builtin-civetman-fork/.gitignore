@@ -1,0 +1,30 @@
+# civetman:start - Managed by civetman. DO NOT EDIT THIS BLOCK.
+debug-test/mixed.ts
+src/cli/index.ts
+src/cli/ui.ts
+src/core/build.ts
+src/core/engine.ts
+src/core/state.ts
+src/core/watcher.ts
+src/support/config.ts
+src/support/fs.ts
+src/support/import-rewriter.ts
+src/support/integrations.ts
+src/support/utils.ts
+src/types.ts
+src/worker/compile.worker.ts
+src/worker/pool.ts
+tests/buildSkipMap.test.ts
+tests/computeHash.test.ts
+tests/fixture/dummy.ts
+tests/importRewriter.test.ts
+tests/importRewriterIntegration.test.ts
+tests/rebuild.test.ts
+tests/resolveOutputType.test.ts
+tests/temp-watch-test/dummy.ts
+tests/tmpFileCleanup.test.ts
+tests/watchMode.test.ts
+tests/workerCrash.test.ts
+# civetman:end - End of civetman managed block.
+
+.civetman/
