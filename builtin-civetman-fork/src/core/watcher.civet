@@ -130,8 +130,8 @@ export attachWatchHandlers := (watcher: FSWatcher,
             // Manually update context after a single file rebuild
             if result.status == 'built' or result.status == 'skip'
                 ctx.outFiles.add(result.outFile)
-                if ctx.opts.mapFiles and await fs.pathExists(result.outFile + ".map")
-                    ctx.outFiles.add(result.outFile + ".map")
+                if result.mapFile
+                    ctx.outFiles.add(result.mapFile)
                 ctx.newHashes[result.file] = { sig: result.signature, outFile: result.outFile }
             
             // Immediately refresh VS Code excludes to minimise flicker

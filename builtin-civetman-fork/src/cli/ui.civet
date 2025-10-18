@@ -13,15 +13,15 @@ export startBuildSpinner := (): Ora =>
     ora(c.blue("Building Civet files")).start()
 
 // Report build result (success or failure)
-export reportBuildResult := (hadError: boolean, builtCount: number, skippedCount: number) =>
+export reportBuildResult := (spinner: Ora, hadError: boolean, builtCount: number, skippedCount: number) =>
     finalMessage .= `Built ${builtCount} file(s)`
     if skippedCount > 0
         finalMessage = `${finalMessage}, ${skippedCount} skipped`
 
     if !hadError
-        console.log(c.green(`Build complete! ${finalMessage}`))
+        spinner.succeed(c.green(`Build complete! ${finalMessage}`))
     else
-        console.log(c.red(`Build failed. ${finalMessage}`))
+        spinner.fail(c.red(`Build failed. ${finalMessage}`))
 
 // Log a single compilation result
 export logCompileResult := (spinner: Ora, res: CompileResult) =>

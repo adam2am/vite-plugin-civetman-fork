@@ -40,6 +40,7 @@ export type CompileSuccess =
     file: string
     outFile: string
     signature: string
+    mapFile?: string  // path to .map file if created
 
 export type CompileError =
     status: "error"

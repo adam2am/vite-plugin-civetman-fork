@@ -63,18 +63,20 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
         if res.status == 'built'
             builtCount++
             ctx.outFiles.add(res.outFile)
-            if opts.mapFiles and await fs.pathExists(res.outFile + ".map")
-                ctx.outFiles.add(res.outFile + ".map")
+            if res.mapFile
+                ctx.outFiles.add(res.mapFile)
             ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
         else if res.status == 'skip'
             skippedCount++
             ctx.outFiles.add(res.outFile)
+            if res.mapFile
+                ctx.outFiles.add(res.mapFile)
             ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
         else if res.status == 'error'
             hadError = true
         logCompileResult(spinner, res)
     
-    reportBuildResult(hadError, builtCount, skippedCount)
+    reportBuildResult(spinner, hadError, builtCount, skippedCount)
 
     // Step 5: prune stale outputs & save new state
     await pruneStaleOutputs(ctx)

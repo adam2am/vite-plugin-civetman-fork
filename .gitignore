@@ -176,7 +176,6 @@ dist
 # civetman:start - Managed by civetman. DO NOT EDIT THIS BLOCK.
 builtin-civetman-fork/debug-test/mixed.ts
 builtin-civetman-fork/src/cli/index.ts
-builtin-civetman-fork/src/cli/index.ts
 builtin-civetman-fork/src/cli/ui.ts
 builtin-civetman-fork/src/core/engine.ts
 builtin-civetman-fork/src/core/orchestrator.ts
@@ -197,8 +196,6 @@ builtin-civetman-fork/tests/importRewriter.test.ts
 builtin-civetman-fork/tests/importRewriterIntegration.test.ts
 builtin-civetman-fork/tests/rebuild.test.ts
 builtin-civetman-fork/tests/resolveOutputType.test.ts
-builtin-civetman-fork/tests/temp-watch-test/dummy.ts
-builtin-civetman-fork/tests/temp-watch-test/new-file.ts
 builtin-civetman-fork/tests/tmpFileCleanup.test.ts
 builtin-civetman-fork/tests/watchMode.test.ts
 builtin-civetman-fork/tests/workerCrash.test.ts

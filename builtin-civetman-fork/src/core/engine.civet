@@ -94,7 +94,7 @@ export class BuildEngine
         if !@ctx.opts.force and prev and prev.sig == signature and prev.outFile == expectedOut and await fs.pathExists(expectedOut)
             // Return the skip result - let the caller handle state updates
             logDebug("[COMPILE] Skipping (signature match)", file)
-            return { status: "skip", file, outFile: expectedOut, signature: signature }
+            return { status: "skip", file, outFile: expectedOut, signature: signature, mapFile: @ctx.opts.mapFiles and await fs.pathExists(expectedOut + ".map") ? expectedOut + ".map" : undefined }
 
         code .= ""
         mapJson .= null
@@ -188,7 +188,7 @@ export class BuildEngine
             logDebug("[WRITE] Best-effort cleanup of sibling file failed.", { siblingOut, err })
 
         logDebug("built", file)
-        return { status: "built", file, outFile: expectedOut, signature }
+        return { status: "built", file, outFile: expectedOut, signature, mapFile: @ctx.opts.mapFiles and mapJson ? mapFile : undefined }
 
     // Handle a source deletion - returns state update describing what needs to be deleted.
     createRemoveUpdate(file: string): CompileStateUpdate
