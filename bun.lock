@@ -33,11 +33,11 @@
         "typescript-eslint": "^8.46.1",
         "vite": "^7.1.10",
         "vite-plugin-civet": "^0.2.8",
-        "vite-plugin-civetman-fork": "^2.3.5",
+        "vite-plugin-civetman-fork": "^2.3.6",
         "vitest": "^3.2.4",
       },
       "peerDependencies": {
-        "vite": "^6.0.0",
+        "vite": "^7.0.0",
       },
     },
   },

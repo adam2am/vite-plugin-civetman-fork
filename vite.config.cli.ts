@@ -1,7 +1,5 @@
 import { defineConfig, type PluginOption } from "vite"
-import { civetman } from "./index.js"
-
-const devOutDir = 'builtin-civetman-fork/dist/dev-output';
+import { civetman } from "vite-plugin-civetman-fork"
 
 export default defineConfig({
 	server: {
@@ -10,7 +8,7 @@ export default defineConfig({
 		watch: {
 			// Prevent Vite from restarting when civetman writes compiled files.
 			// This is the key fix for the infinite loop.
-			ignored: [`**/${devOutDir}/**`]
+			ignored: ['**/builtin-civetman-fork/src/**/*.ts']
 		}
 	},
 	plugins: [civetman({
@@ -19,9 +17,6 @@ export default defineConfig({
 		vscodeHide: true,
 		inlineMap: 'full',
 		mapFiles: false,
-		outTs: devOutDir,
-		ignoreFolders: ['node_modules', 'dist', 'tests', 'builtin-civetman-fork/dist'],
-		concurrency: 4,
-		force: false
+		ignoreFolders: ['node_modules', 'dist'],
 	}) as PluginOption],
 }) 

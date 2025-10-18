@@ -54,9 +54,11 @@ describe 'Import Rewriter', () ->
       expect(imports[0].spec).toBe("./module.civet")
       expect(imports[0].type).toBe("side-effect")
 
+
   describe 'rewriteCivetImports', () ->
     it 'should rewrite single .civet import', ->
       ext := '.civet'
+      a := 123;
       input := `import { foo } from "./module${ext}"`
       result := rewriteCivetImports(input)
       expect(result).toBe('import { foo } from "./module"')
