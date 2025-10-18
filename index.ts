@@ -28,7 +28,7 @@ function getCivetmanCliPath(): string {
       console.log("Original civetman detected. It was 2 years without updates, so civetman-fork or deletion to activate built-in civetman recommended");
     } catch {
       // Fallback to the built-in civetman-fork (embedded)
-      cliPath = path.join(__dirname, "dist", "cli", "index.js");
+      cliPath = path.join(__dirname, "cli", "index.js");
       console.log("Built-in civetman-fork activated");
     }
   }
