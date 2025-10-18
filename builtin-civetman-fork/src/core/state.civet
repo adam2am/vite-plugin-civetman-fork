@@ -47,27 +47,6 @@ export saveNewState := async (ctx: BuildContext) =>
 
     logDebug("[STATE] State saved successfully")
 
-// Apply state updates to BuildContext (mutates the context object)
-export applyStateUpdate := (ctx: BuildContext, update: CompileStateUpdate): void =>
-    // Add new output files
-    for outFile of update.outFiles
-        ctx.outFiles.add(outFile)
-    
-    // Merge new hashes
-    Object.assign(ctx.newHashes, update.newHashes)
-    
-    // Remove deleted files
-    for file of update.filesToDelete
-        ctx.outFiles.delete(file)
-    
-    // Remove hash entries if specified
-    if update.hashesToDelete
-        for file of update.hashesToDelete
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Safe: Record cleanup
-            delete ctx.prevHashes[file]
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Safe: Record cleanup
-            delete ctx.newHashes[file]
-
 // Helper to prune stale outputs
 export pruneStaleOutputs := async (ctx: BuildContext) =>
     stale := [...ctx.prevGenerated].filter((f) => !ctx.outFiles.has(f))

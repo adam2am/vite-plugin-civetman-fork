@@ -178,10 +178,8 @@ builtin-civetman-fork/debug-test/mixed.ts
 builtin-civetman-fork/src/cli/index.ts
 builtin-civetman-fork/src/cli/index.ts
 builtin-civetman-fork/src/cli/ui.ts
-builtin-civetman-fork/src/core/build.ts
-builtin-civetman-fork/src/core/build.ts
 builtin-civetman-fork/src/core/engine.ts
-builtin-civetman-fork/src/core/engine.ts
+builtin-civetman-fork/src/core/orchestrator.ts
 builtin-civetman-fork/src/core/state.ts
 builtin-civetman-fork/src/core/watcher.ts
 builtin-civetman-fork/src/support/config.ts
@@ -191,7 +189,6 @@ builtin-civetman-fork/src/support/integrations.ts
 builtin-civetman-fork/src/support/utils.ts
 builtin-civetman-fork/src/types.ts
 builtin-civetman-fork/src/worker/compile.worker.ts
-builtin-civetman-fork/src/worker/pool.ts
 builtin-civetman-fork/src/worker/pool.ts
 builtin-civetman-fork/tests/buildSkipMap.test.ts
 builtin-civetman-fork/tests/computeHash.test.ts
@@ -204,7 +201,6 @@ builtin-civetman-fork/tests/temp-watch-test/dummy.ts
 builtin-civetman-fork/tests/temp-watch-test/new-file.ts
 builtin-civetman-fork/tests/tmpFileCleanup.test.ts
 builtin-civetman-fork/tests/watchMode.test.ts
-builtin-civetman-fork/tests/workerCrash.test.ts
 builtin-civetman-fork/tests/workerCrash.test.ts
 # civetman:end - End of civetman managed block.
 

@@ -13,7 +13,6 @@ import type { Options, BuildContext } from "../support/config.civet"
 import type { BuildEngine } from "./engine.civet"
 import { getSourcePaths, toPosix, logDebug } from "../support/utils.civet"
 import { logWatchEventBuilt, logWatchEventError, logWatchReady } from "../cli/ui.civet"
-import { applyStateUpdate } from "./state.civet"
 import { addVscodeExcludes } from "../support/integrations.civet"
 import { cleanupTmpFiles } from "../support/fs.civet"
 import { saveNewState } from "./state.civet"
@@ -117,7 +116,7 @@ export attachWatchHandlers := (watcher: FSWatcher,
             engine.contentCache.delete(file)
         
         try
-            { result, stateUpdate } := await engine.buildWithStateUpdate(file)
+            result := await engine.build(file)
             
             if result.status == 'built'
                 logDebug("[REBUILD_ONE] Built", file, "->", result.outFile)
@@ -128,8 +127,12 @@ export attachWatchHandlers := (watcher: FSWatcher,
                 logDebug("[REBUILD_ONE] Error compiling", file, result.error)
                 logWatchEventError(result.file, result.outFile, result.error)
             
-            // Apply state update to context (mutates ctx in place)
-            applyStateUpdate(ctx, stateUpdate)
+            // Manually update context after a single file rebuild
+            if result.status == 'built' or result.status == 'skip'
+                ctx.outFiles.add(result.outFile)
+                if ctx.opts.mapFiles and await fs.pathExists(result.outFile + ".map")
+                    ctx.outFiles.add(result.outFile + ".map")
+                ctx.newHashes[result.file] = { sig: result.signature, outFile: result.outFile }
             
             // Immediately refresh VS Code excludes to minimise flicker
             await addVscodeExcludes(ctx)
@@ -185,6 +188,11 @@ export attachWatchHandlers := (watcher: FSWatcher,
                 logDebug("[WATCHER_UNLINK] Failed to delete stale file.", { fileToDelete, err })
 
         // Apply the state changes (mutates ctx in place)
-        applyStateUpdate(ctx, update)
+        for file of update.filesToDelete
+            ctx.outFiles.delete(file)
+        if update.hashesToDelete
+            for file of update.hashesToDelete
+                delete ctx.prevHashes[file]
+                delete ctx.newHashes[file]
         saveStateAndSync()
 

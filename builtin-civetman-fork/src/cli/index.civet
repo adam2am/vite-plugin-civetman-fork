@@ -5,7 +5,7 @@
 { program } from "commander"
 import { defaultOpts, type Options } from "../support/config.civet"
 import { collectDirs, logDebug, debounce } from "../support/utils.civet"
-import { runBuild, runTscTypeCheck } from "../core/build.civet"
+import { orchestrateBuild, runTscTypeCheck } from "../core/orchestrator.civet"
 import { createWatcher, attachWatchHandlers, registerWatcher } from "../core/watcher.civet"
 import { logBuildFinished, logTypeCheckStart, logTypeCheckPassed, logTypeCheckFailed, logWatchModeStarting, logInitialBuildComplete, logWatchModeFailed } from "./ui.civet"
 import { saveNewState } from "../core/state.civet"
@@ -29,7 +29,7 @@ registerBuildCommand := =>
                 workerScriptPath = (await fs.pathExists(candidate1)) ? candidate1 : candidate2
             engine .= null
             try
-                buildResult := await runBuild(cwd, opts, workerScriptPath, true)
+                buildResult := await orchestrateBuild(cwd, opts, workerScriptPath, true)
                 engine = buildResult.engine
                 logBuildFinished()
 
@@ -44,7 +44,7 @@ registerBuildCommand := =>
                         logDebug("[TYPECHECK] Type-check error details:", err)
                         void (process.exitCode = 1)
             catch (err: unknown)
-                // runBuild will have already logged details
+                // orchestrateBuild will have already logged details
                 logDebug("[BUILD] Build error details:", err)
                 void (process.exitCode = 1)
             finally
@@ -66,7 +66,7 @@ registerDevCommand := =>
             workerScriptPath = (await fs.pathExists(candidate1)) ? candidate1 : candidate2
         try
             logWatchModeStarting()
-            { ctx, engine } := await runBuild(cwd, opts, workerScriptPath, false)
+            { ctx, engine } := await orchestrateBuild(cwd, opts, workerScriptPath, false)
             logInitialBuildComplete()
             
             saveStateAndSync := debounce(async =>

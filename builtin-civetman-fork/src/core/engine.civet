@@ -5,11 +5,11 @@
 // --------------------------------------------------------------
 
 fs from "fs-extra"
+path from "node:path"
 { WorkerPool } from "../worker/pool.civet"
 { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 // Import helpers and types from the refactored modules.
-import { writeOutputAndGetResult } from "./build.civet"
 import { resolveOutputType, makeSignature, fileToOutFile, logDebug } from "../support/utils.civet"
 import type { BuildContext } from "../support/config.civet"
 
@@ -32,43 +32,18 @@ export class BuildEngine
         @contentCache = new Map<string, string>()
 
     // Build / rebuild *all* sources currently in ctx.sources
-    async buildAll(onProgress?: (result: CompileResult) => void)
-        tasks := @ctx.sources.map (file) => @build(file, onProgress)
-        await Promise.allSettled(tasks)
+    async buildAll(): Promise<CompileResult[]>
+        tasks := @ctx.sources.map (file) => @build(file)
+        results := await Promise.allSettled(tasks)
+        // Flatten settled results, handling potential top-level errors from build()
+        compiledResults: CompileResult[] := []
+        for settledResult of results
+            if settledResult.status === 'fulfilled'
+                compiledResults.push(settledResult.value)
+            else
+                compiledResults.push({ status: 'error', file: 'unknown', error: settledResult.reason, outFile: '', signature: '' })
+        return compiledResults
 
-    // Build all sources and return results with state updates
-    async buildAllWithStateUpdates(): Promise<{ results: CompileResult[], stateUpdates: CompileStateUpdate[] }>
-        results: CompileResult[] := []
-        stateUpdates: CompileStateUpdate[] := []
-        
-        for file of @ctx.sources
-            { result, stateUpdate } := await @buildWithStateUpdate(file)
-            results.push(result)
-            stateUpdates.push(stateUpdate)
-        
-        return { results, stateUpdates }
-
-    // Build a single file and return both result and state update
-    async buildWithStateUpdate(file: string): Promise<{ result: CompileResult, stateUpdate: CompileStateUpdate }>
-        result := await @runCompileTask(file)
-        stateUpdate := await @createStateUpdate(file, result)
-        return { result, stateUpdate }
-
-    // Create state update from compile result
-    async createStateUpdate(file: string, result: CompileResult): Promise<CompileStateUpdate>
-        outFiles: string[] := []
-        newHashes: Record<string, { sig: string, outFile: string }> := {}
-        filesToDelete: string[] := []
-
-        if result.status === "built" or result.status === "skip"
-            outFiles.push(result.outFile)
-            newHashes[file] = { sig: result.signature, outFile: result.outFile }
-            
-            // Add map file if it exists
-            if @ctx.opts.mapFiles and await fs.pathExists(result.outFile + ".map")
-                outFiles.push(result.outFile + ".map")
-
-        return { outFiles, newHashes, filesToDelete }
 
     // Build a single file. Dedupe if already in progress.
     build(file: string, onProgress?: (result: CompileResult) => void)
@@ -170,7 +145,50 @@ export class BuildEngine
         // ensure cache stores latest content
         @contentCache.set(file, content)
 
-        return await writeOutputAndGetResult(@ctx, file, isTsx, code, mapJson, signature)
+        return await @_writeOutputAndGetResult(file, isTsx, code, mapJson, signature)
+
+    // Handles writing the output of a successful compilation to disk.
+    // This is now an internal method of the engine.
+    async _writeOutputAndGetResult(
+        file: string,
+        isTsx: boolean,
+        code: string,
+        mapJson: string | null,
+        signature: string
+    ): Promise<CompileResult>
+        expectedOut := file.replace(".civet", isTsx ? ".tsx" : ".ts")
+        codeOut .= code
+        
+        // Inject @ts-nocheck header when compiling to JavaScript mode (parseOptions.js = true)
+        if @ctx.parseOpts?.js
+            codeOut = "// @ts-nocheck\n" + codeOut
+        
+        mapFile := expectedOut + ".map"
+
+        if @ctx.opts.inlineMap is "full" and mapJson
+            base64Map := Buffer.from(JSON.stringify(mapJson)).toString("base64")
+            codeOut += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
+
+        if @ctx.opts.mapFiles and mapJson
+            await fs.writeFile(mapFile, JSON.stringify(mapJson))
+
+            if @ctx.opts.inlineMap is "fileurl"
+                codeOut += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"
+        
+        await fs.writeFile(expectedOut, codeOut)
+
+        // --- Cleanup: remove bygone sibling (.ts vs .tsx) to prevent stale duplicates ---
+        siblingOut := file.replace('.civet', isTsx ? '.ts' : '.tsx')
+        try
+            if siblingOut != expectedOut && await fs.pathExists(siblingOut)
+                await fs.unlink(siblingOut)
+            if await fs.pathExists(siblingOut + '.map')
+                await fs.unlink(siblingOut + '.map')
+        catch (err: unknown)
+            logDebug("[WRITE] Best-effort cleanup of sibling file failed.", { siblingOut, err })
+
+        logDebug("built", file)
+        return { status: "built", file, outFile: expectedOut, signature }
 
     // Handle a source deletion - returns state update describing what needs to be deleted.
     createRemoveUpdate(file: string): CompileStateUpdate
