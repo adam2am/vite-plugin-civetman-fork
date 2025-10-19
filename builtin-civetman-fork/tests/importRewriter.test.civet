@@ -148,6 +148,24 @@ import { real } from "./actual${ext}"`
       imports := findAllImports(code)
       expect(imports).toHaveLength(0)
 
+    it 'should ignore imports in template literals', ->
+      code := `const spec = \`import { fake } from './file.civet'\``
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(0)
+
+    it 'should ignore exports in template literals', ->
+      code := `const code = \`export { fake } from "./module.civet"\``
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(0)
+
+    it 'should ignore multiline template literals', ->
+      code := `const msg = \`
+        import { fake } from "./commented.civet"
+        export { also-fake } from "./comment2.civet"
+      \``
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(0)
+
 
   describe 'rewriteCivetImports', () ->
     it 'should rewrite single .civet import', ->
@@ -299,6 +317,13 @@ import { real } from "./actual${ext}"`
       expected := `// import { fake } from "./commented${ext}"
 import { real } from "./actual"`
       expect(result).toBe(expected)
+
+    it 'should not rewrite imports in template literals', ->
+      ext := '.civet'
+      input := `const spec = \`import { fake } from './file${ext}'\``
+      result := rewriteCivetImports(input)
+      // Template literal content should remain unchanged
+      expect(result).toBe(input)
 
     it 'should not affect .civet in middle of path', ->
       ext := '.civet'

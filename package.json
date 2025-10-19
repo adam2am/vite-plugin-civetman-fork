@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-civetman-fork",
-  "version": "2.3.8",
+  "version": "2.3.9",
   "private": false,
   "description": "vite plugin for civetman (civet + watch compile)",
   "keywords": [
@@ -70,7 +70,7 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.1",
     "vite": "^7.1.10",
-    "vite-plugin-civetman-fork": "^2.3.7",
+    "vite-plugin-civetman-fork": "^2.3.8",
     "vitest": "^3.2.4"
   },
   "peerDependencies": {

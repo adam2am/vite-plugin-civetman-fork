@@ -24,7 +24,7 @@ function isRealKeyword(content: string, index: number, keyword: string): boolean
  * This prevents matching import/export keywords that appear in strings or comments.
  */
 function isInCommentOrString(content: string, pos: number): boolean {
-  inString: '"' | "'" | null .= null;
+  inString: '"' | "'" | '`' | null .= null;
   escapeNext .= false;
   i .= 0;
 
@@ -51,9 +51,9 @@ function isInCommentOrString(content: string, pos: number): boolean {
       continue;
     }
 
-    // Enter string
-    if (content[i] === '"' || content[i] === "'") {
-      inString = content[i] as '"' | "'";
+    // Enter string or template literal
+    if (content[i] === '"' || content[i] === "'" || content[i] === '`') {
+      inString = content[i] as '"' | "'" | '`';
       i++;
       continue;
     }

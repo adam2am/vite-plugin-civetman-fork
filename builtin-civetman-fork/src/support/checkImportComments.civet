@@ -1,0 +1,6 @@
+import type { CivetParseOptions } from "../types.civet"
+
+// import type { CivetParseOptions } from "../types.civet "
+
+console.log `import type { CivetParseOptions } from "../types.civet"`
+console.log `import type { CivetParseOptions } from "../types.civet`

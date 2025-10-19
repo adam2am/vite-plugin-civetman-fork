@@ -26,7 +26,8 @@
     "builtin-civetman-fork/src/support/utils.ts": true,
     "builtin-civetman-fork/src/worker/compile.worker.ts": true,
     "builtin-civetman-fork/src/worker/pool.ts": true,
-    "builtin-civetman-fork/tests/fixture/dummy.ts": true
+    "builtin-civetman-fork/tests/fixture/dummy.ts": true,
+    "builtin-civetman-fork/src/support/checkImportComments.ts": true
   },
   "civetman:managed": [
     "builtin-civetman-fork/debug-test/mixed.ts",
@@ -53,6 +54,7 @@
     "builtin-civetman-fork/src/support/utils.ts",
     "builtin-civetman-fork/src/worker/compile.worker.ts",
     "builtin-civetman-fork/src/worker/pool.ts",
-    "builtin-civetman-fork/tests/fixture/dummy.ts"
+    "builtin-civetman-fork/tests/fixture/dummy.ts",
+    "builtin-civetman-fork/src/support/checkImportComments.ts"
   ]
 }
