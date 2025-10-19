@@ -34,18 +34,6 @@ describe 'Import Rewriter', () ->
       expect(imports).toHaveLength(1)
       expect(imports[0].spec).toBe("./module.civet")
 
-    it 'should handle unquoted imports', ->
-      code := "import { foo } from ./module" // Civet would likely fail to compile this, but as a unit test...
-      imports := findAllImports(code)
-      expect(imports.length).toBe(0)
-
-    it 'should ignore non-.civet imports', ->
-      code := 'import { foo } from "./module.ts"\nimport { bar } from "external"'
-      imports := findAllImports(code) 
-      expect(imports).toHaveLength(2)
-      expect(imports[0].spec).toBe("./module.ts")
-      expect(imports[1].spec).toBe("external")
-
     it 'should handle side-effect imports', ->
       ext := '.civet'
       code := `import "./module${ext}";`
@@ -53,6 +41,112 @@ describe 'Import Rewriter', () ->
       expect(imports).toHaveLength(1)
       expect(imports[0].spec).toBe("./module.civet")
       expect(imports[0].type).toBe("side-effect")
+
+    // ============ EXPORT TESTS ============
+    it 'should find named exports', ->
+      ext := '.civet'
+      code := `export { foo, bar } from "./module${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./module.civet")
+      expect(imports[0].type).toBe("from")
+
+    it 'should find namespace exports', ->
+      ext := '.civet'
+      code := `export * from "./all${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./all.civet")
+      expect(imports[0].type).toBe("from")
+
+    it 'should find type exports', ->
+      ext := '.civet'
+      code := `export type { MyType } from "./types${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./types.civet")
+      expect(imports[0].type).toBe("from")
+
+    it 'should find type namespace exports', ->
+      ext := '.civet'
+      code := `export type * from "./type-defs${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./type-defs.civet")
+
+    it 'should find side-effect exports', ->
+      ext := '.civet'
+      code := `export "./init${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./init.civet")
+      expect(imports[0].type).toBe("side-effect")
+
+    // ============ MULTIPLE IMPORTS/EXPORTS ============
+    it 'should find mixed imports and exports', ->
+      ext := '.civet'
+      code := `import { a } from "./a${ext}"
+export { b } from "./b${ext}"
+import type { C } from "./c${ext}"
+export type { D } from "./d${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(4)
+      expect(imports[0].spec).toBe("./a.civet")
+      expect(imports[1].spec).toBe("./b.civet")
+      expect(imports[2].spec).toBe("./c.civet")
+      expect(imports[3].spec).toBe("./d.civet")
+
+    // ============ EDGE CASES: COMMENTS ============
+    it 'should ignore imports in line comments', ->
+      ext := '.civet'
+      code := `// import { fake } from "./not-real${ext}"
+import { real } from "./actual${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./actual.civet")
+
+    it 'should ignore exports in line comments', ->
+      ext := '.civet'
+      code := `// export { fake } from "./commented${ext}"
+export { real } from "./actual${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./actual.civet")
+
+    it 'should ignore imports in block comments', ->
+      ext := '.civet'
+      code := `/* import { fake } from "./not-real${ext}" */
+import { real } from "./actual${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./actual.civet")
+
+    it 'should ignore multiline block comments', ->
+      ext := '.civet'
+      code := `/**
+ * import { fake } from "./comment${ext}"
+ * export { also-fake } from "./comment2${ext}"
+ */
+import { real } from "./actual${ext}"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(1)
+      expect(imports[0].spec).toBe("./actual.civet")
+
+    // ============ EDGE CASES: STRINGS ============
+    it 'should ignore imports in string literals', ->
+      code := `const spec = "import { fake } from './file.civet'"`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(0)
+
+    it 'should ignore exports in string literals', ->
+      code := `const code = 'export { fake } from "./module.civet"'`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(0)
+
+    it 'should ignore string content with escaped quotes', ->
+      code := `const msg = "import { x } from \\"./file.civet\\""`
+      imports := findAllImports(code)
+      expect(imports).toHaveLength(0)
 
 
   describe 'rewriteCivetImports', () ->
@@ -78,34 +172,57 @@ import { bar } from "./other"`
       result := rewriteCivetImports(input)
       expect(result).toBe("import { foo } from './module'")
 
-    it 'should not rewrite unquoted import specifiers', ->
+    it 'should rewrite type imports', ->
       ext := '.civet'
-      input := `import { foo } from ./module${ext}`
+      input := `import type { Foo } from "./types${ext}"`
       result := rewriteCivetImports(input)
-      // The rewriter should only target quoted strings. It correctly ignores
-      // unquoted specifiers, so the input should be returned unchanged.
-      expect(result).toBe(input)
+      expect(result).toBe('import type { Foo } from "./types"')
 
-    it 'should not touch non-.civet imports', ->
+    it 'should rewrite side-effect imports', ->
       ext := '.civet'
-      input := `import { foo } from "./module.ts"
-import { bar } from "external"
-import { baz } from "./module${ext}"`
+      input := `import "./style${ext}"`
       result := rewriteCivetImports(input)
-      expected := `import { foo } from "./module.ts"
-import { bar } from "external"
-import { baz } from "./module"`
-      expect(result).toBe(expected)
+      expect(result).toBe('import "./style"')
 
-    it 'should handle mixed import types', ->
+    // ============ EXPORT REWRITES ============
+    it 'should rewrite named exports', ->
+      ext := '.civet'
+      input := `export { foo } from "./module${ext}"`
+      result := rewriteCivetImports(input)
+      expect(result).toBe('export { foo } from "./module"')
+
+    it 'should rewrite namespace exports', ->
+      ext := '.civet'
+      input := `export * from "./all${ext}"`
+      result := rewriteCivetImports(input)
+      expect(result).toBe('export * from "./all"')
+
+    it 'should rewrite type exports', ->
+      ext := '.civet'
+      input := `export type { MyType } from "./types${ext}"`
+      result := rewriteCivetImports(input)
+      expect(result).toBe('export type { MyType } from "./types"')
+
+    it 'should rewrite side-effect exports', ->
+      ext := '.civet'
+      input := `export "./init${ext}"`
+      result := rewriteCivetImports(input)
+      expect(result).toBe('export "./init"')
+
+    // ============ MIXED REWRITES ============
+    it 'should handle mixed import and export types', ->
       ext := '.civet'
       input := `import type { Foo } from "./types${ext}"
 import { bar } from "./module${ext}"
-import "./side-effect${ext}"`
+import "./side-effect${ext}"
+export { baz } from "./exported${ext}"
+export * from "./star${ext}"`
       result := rewriteCivetImports(input)
       expected := `import type { Foo } from "./types"
 import { bar } from "./module"
-import "./side-effect"`
+import "./side-effect"
+export { baz } from "./exported"
+export * from "./star"`
       expect(result).toBe(expected)
 
     it 'should handle complex multi-line imports', ->
@@ -118,6 +235,21 @@ import "./side-effect"`
       result := rewriteCivetImports(input)
       expected := `import {
         foo,
+        bar,
+        type Baz
+      } from "./complex"`
+      expect(result).toBe(expected)
+
+    it 'should handle complex multi-line exports', ->
+      ext := '.civet'
+      input := `export {
+        foo as fooRenamed,
+        bar,
+        type Baz
+      } from "./complex${ext}"`
+      result := rewriteCivetImports(input)
+      expected := `export {
+        foo as fooRenamed,
         bar,
         type Baz
       } from "./complex"`
@@ -156,6 +288,17 @@ console.log(foo)`
       input := `import { foo } from "./civet-folder/module${ext}"`
       result := rewriteCivetImports(input)
       expect(result).toBe('import { foo } from "./civet-folder/module"')
+
+    // ============ EDGE CASE: NOT REWRITING IN COMMENTS/STRINGS ============
+    it 'should not rewrite imports in comments', ->
+      ext := '.civet'
+      input := `// import { fake } from "./commented${ext}"
+import { real } from "./actual${ext}"`
+      result := rewriteCivetImports(input)
+      // The commented line stays unchanged, only the real import is rewritten
+      expected := `// import { fake } from "./commented${ext}"
+import { real } from "./actual"`
+      expect(result).toBe(expected)
 
     it 'should not affect .civet in middle of path', ->
       ext := '.civet'

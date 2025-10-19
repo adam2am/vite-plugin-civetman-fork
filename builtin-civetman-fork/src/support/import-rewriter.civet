@@ -20,6 +20,76 @@ function isRealKeyword(content: string, index: number, keyword: string): boolean
 }
 
 /**
+ * Check if a position is inside a comment or string literal at the top level.
+ * This prevents matching import/export keywords that appear in strings or comments.
+ */
+function isInCommentOrString(content: string, pos: number): boolean {
+  inString: '"' | "'" | null .= null;
+  escapeNext .= false;
+  i .= 0;
+
+  while (i < pos && i < content.length) {
+    // Handle escape sequences in strings
+    if (inString && escapeNext) {
+      escapeNext = false;
+      i++;
+      continue;
+    }
+
+    if (inString) {
+      if (content[i] === '\\') {
+        escapeNext = true;
+        i++;
+        continue;
+      }
+      if (content[i] === inString) {
+        inString = null;
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+
+    // Enter string
+    if (content[i] === '"' || content[i] === "'") {
+      inString = content[i] as '"' | "'";
+      i++;
+      continue;
+    }
+
+    // Handle line comments - skip to end of line or end of input
+    if (content[i] === '/' && content[i + 1] === '/') {
+      // If pos is after this point and before the newline, it's in a comment
+      newlinePos := content.indexOf('\n', i);
+      if (newlinePos === -1 || pos < newlinePos) {
+        // pos is before the newline (or there is no newline), so it's in the comment
+        return true;
+      }
+      // Skip to after the newline
+      i = newlinePos + 1;
+      continue;
+    }
+
+    // Handle block comments - skip until */
+    if (content[i] === '/' && content[i + 1] === '*') {
+      endComment := content.indexOf('*/', i + 2);
+      if (endComment === -1 || pos < endComment + 2) {
+        // pos is before the end of comment (or comment doesn't end)
+        return true;
+      }
+      // Skip past the comment
+      i = endComment + 2;
+      continue;
+    }
+
+    i++;
+  }
+
+  return inString !== null;
+}
+
+/**
  * Utility function to strip quotes from a string
  */
 export function stripQuotes(text: string): string {
@@ -73,6 +143,12 @@ export function findAllImports(content: string): ImportMatch[] {
 
     // Validate it's a real keyword
     if (!isRealKeyword(content, keywordIdx, keyword)) {
+      i = keywordIdx + 1;
+      continue;
+    }
+
+    // Also validate it's not in a comment or string
+    if (isInCommentOrString(content, keywordIdx)) {
       i = keywordIdx + 1;
       continue;
     }
