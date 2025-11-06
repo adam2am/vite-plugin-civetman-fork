@@ -8,6 +8,7 @@ export interface ImportMatch {
   offset: number;
   length: number;
   type: 'from' | 'side-effect';
+  typeOnly: boolean;
 }
 
 /**
@@ -159,7 +160,9 @@ export function findAllImports(content: string): ImportMatch[] {
     while (i < content.length && /\s/.test(content[i])) i++;
     
     // Check for 'type' keyword (for type-only imports/exports)
+    isTypeOnly .= false;
     if (content.substring(i, i + 4) === 'type') {
+      isTypeOnly = true;
       i += 4; // Move past 'type'
       // Skip whitespace after 'type'
       while (i < content.length && /\s/.test(content[i])) i++;
@@ -228,7 +231,7 @@ export function findAllImports(content: string): ImportMatch[] {
         i = specEnd + 1;
         
         type := foundFrom ? 'from' : (potentialSideEffect ? 'side-effect' : 'from');
-        results.push({ spec, offset: specOffset, length: specLength, type });
+        results.push({ spec, offset: specOffset, length: specLength, type, typeOnly: isTypeOnly });
         break; // Move to next keyword match
       }
       
@@ -279,6 +282,38 @@ export function rewriteCivetImports(code: string): string {
     newSpec := match.spec.replace(/\.civet$/, '');
     
     // Rebuild with proper quotes
+    newText := quoteChar ? quoteChar + newSpec + quoteChar : newSpec;
+    result = replaceAt(result, match.offset, match.length, newText);
+  }
+  
+  return result;
+}
+
+/**
+ * Rewrite ESM .js extensions for relative bare imports (no extension).
+ * Adds .js to './mod' and '../utils/index' but skips type-only imports,
+ * bare module specifiers, and imports that already have extensions.
+ */
+export function rewriteEsmJsExtensions(code: string): string {
+  imports := findAllImports(code);
+  result .= code;
+  
+  for (const match of imports.reverse()) {
+    spec := match.spec;
+    
+    // Skip if it's a bare module specifier (doesn't start with . or /)
+    if (!spec.startsWith('.') && !spec.startsWith('/')) continue;
+    
+    // Skip if it already has an extension
+    if (/\.(js|mjs|cjs|ts|tsx|jsx|mts|cts)$/.test(spec)) continue;
+    
+    // Skip type-only imports
+    if match.typeOnly continue;
+    
+    // Add .js extension
+    originalText := code.substring(match.offset, match.offset + match.length);
+    quoteChar := originalText.startsWith('"') || originalText.startsWith("'") ? originalText[0] : undefined;
+    newSpec := spec + '.js';
     newText := quoteChar ? quoteChar + newSpec + quoteChar : newSpec;
     result = replaceAt(result, match.offset, match.length, newText);
   }

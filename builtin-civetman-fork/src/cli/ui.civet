@@ -6,7 +6,7 @@ c from "picocolors"
 ora from "ora"
 import type { Ora } from "ora"
 import type { CompileResult } from "../types.civet"
-import { formatErrorForDisplay } from "../support/utils.civet"
+import { formatErrorForDisplay, logDebug } from "../support/utils.civet"
 
 // Create and start a build spinner
 export startBuildSpinner := (): Ora =>
@@ -36,7 +36,15 @@ export logCompileResult := (spinner: Ora, res: CompileResult) =>
 
 // Log watch mode events
 export logWatchEventBuilt := (file: string, outFile: string) =>
-    console.log(c.green('  ✓ ' + c.cyan(file) + " -> " + c.green(outFile)))
+    // Use relative paths for cleaner output (just filename if in cwd, or relative path)
+    path from "node:path"
+    fileRel := path.isAbsolute(file) ? path.relative(process.cwd(), file) : file
+    outRel := path.isAbsolute(outFile) ? path.relative(process.cwd(), outFile) : outFile
+    // Normalize to POSIX for consistent output
+    toPosix := (p: string) => p.split(path.sep).join("/")
+    fileDisplay := toPosix(fileRel)
+    outDisplay := toPosix(outRel)
+    console.log(c.green('  ✓ ' + c.cyan(fileDisplay) + " -> " + c.green(outDisplay)))
 
 export logWatchEventError := (file: string, outFile: string, error: unknown) =>
     console.error(c.red("  ✗ Error compiling " + c.cyan(file)) + ` (stub written to ${c.yellow(outFile)})`)

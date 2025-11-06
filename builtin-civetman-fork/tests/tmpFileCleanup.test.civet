@@ -28,6 +28,7 @@ describe "Temporary File Cleanup", ->
     
     it("should not leave .civetmantmp files after build", async ->
         if !testDir then throw new Error("testDir not initialized")
+        currentTestDir := testDir
         
         cli := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
         unless await fs.pathExists(cli)
@@ -36,7 +37,7 @@ describe "Temporary File Cleanup", ->
         // Run build
         await new Promise<void> (resolve, reject) ->
             child := spawn('node', [cli, 'build'], { 
-                cwd: testDir!, 
+                cwd: currentTestDir, 
                 shell: process.platform === 'win32'
             })
             
@@ -51,7 +52,7 @@ describe "Temporary File Cleanup", ->
                     reject(new Error(`Build failed with code ${code}: ${output}`))
         
         // Check for any .civetmantmp files in the test directory
-        allFiles := await fs.readdir(testDir!, { recursive: true, withFileTypes: true })
+        allFiles := await fs.readdir(currentTestDir, { recursive: true, withFileTypes: true })
         tmpFiles := allFiles
             .filter((dirent) => dirent.isFile() && dirent.name.endsWith('.civetmantmp'))
             .map((dirent) => dirent.name)
@@ -66,9 +67,10 @@ describe "Temporary File Cleanup", ->
         // ..gitignore.5a4843f9-7bad-4f9d-8bb5-74f7afbe7df6.civetmantmp
         
         if !testDir then throw new Error("testDir not initialized")
+        currentTestDir := testDir
         
         // Manually create a stray temp file to simulate the bug
-        strayTmpFile := path.join(testDir!, '..gitignore.test-uuid.civetmantmp')
+        strayTmpFile := path.join(currentTestDir, '..gitignore.test-uuid.civetmantmp')
         await fs.writeFile(strayTmpFile, '# test content')
         
         // Verify it exists
@@ -78,7 +80,7 @@ describe "Temporary File Cleanup", ->
         cli := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
         await new Promise<void> (resolve, reject) ->
             child := spawn('node', [cli, 'build'], { 
-                cwd: testDir!, 
+                cwd: currentTestDir, 
                 shell: process.platform === 'win32'
             })
             

@@ -10,7 +10,7 @@ path from "node:path"
 { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 // Import helpers and types from the refactored modules.
-import { resolveOutputType, makeSignature, fileToOutFile, logDebug } from "../support/utils.civet"
+import { resolveOutputType, makeSignature, fileToOutFile, toPosix, logDebug } from "../support/utils.civet"
 import type { BuildContext } from "../support/config.civet"
 
 { compile } from "@danielx/civet"
@@ -68,33 +68,41 @@ export class BuildEngine
         return task
 
     async runCompileTask(file: string): Promise<CompileResult>
-        isTsx := resolveOutputType(@ctx, file)
+        // file might be relative (from glob) or absolute (from watcher), so resolve it first
+        fileAbs := path.isAbsolute(file) ? file : path.resolve(@ctx.cwd, file)
+        isTsx := resolveOutputType(@ctx, fileAbs)
         // Reuse cached file content when available to avoid IO on rapid rebuilds
-        content := if @contentCache.has(file)
-            cachedContent := @contentCache.get(file)
+        content := if @contentCache.has(fileAbs)
+            cachedContent := @contentCache.get(fileAbs)
             if cachedContent
                 cachedContent
             else 
                 // This should never happen if has() returned true, but defensive code is good
-                readData := await fs.readFile(file, "utf8")
-                @contentCache.set(file, readData)
+                readData := await fs.readFile(fileAbs, "utf8")
+                @contentCache.set(fileAbs, readData)
                 readData
             
         else
-            readData := await fs.readFile(file, "utf8")
-            @contentCache.set(file, readData)
+            readData := await fs.readFile(fileAbs, "utf8")
+            @contentCache.set(fileAbs, readData)
             readData
         
         parseOpts := @ctx.parseOpts
         signature := makeSignature(content, { tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles, configContent: @ctx.configContent })
 
         // Skip check (respect --force flag)
-        prev := @ctx.prevHashes[file]
-        expectedOut := fileToOutFile(file, isTsx)
-        if !@ctx.opts.force and prev and prev.sig == signature and prev.outFile == expectedOut and await fs.pathExists(expectedOut)
+        // Normalize keys to POSIX to avoid Windows path separator mismatches in persisted state
+        // Use path relative to cwd for consistent keys across different working directories
+        fileRel := path.relative(@ctx.cwd, fileAbs)
+        key := toPosix(fileRel)
+        prev := @ctx.prevHashes[key]
+        expectedOut := fileToOutFile(fileAbs, isTsx)
+        expectedOutRel := path.relative(@ctx.cwd, expectedOut)
+        expectedOutPosix := toPosix(expectedOutRel)
+        if !@ctx.opts.force and prev and prev.sig == signature and prev.outFile == expectedOutPosix and await fs.pathExists(expectedOut)
             // Return the skip result - let the caller handle state updates
-            logDebug("[COMPILE] Skipping (signature match)", file)
-            return { status: "skip", file, outFile: expectedOut, signature: signature, mapFile: @ctx.opts.mapFiles and await fs.pathExists(expectedOut + ".map") ? expectedOut + ".map" : undefined }
+            logDebug("[COMPILE] Skipping (signature match)", fileAbs)
+            return { status: "skip", file: fileAbs, outFile: expectedOut, signature: signature, mapFile: @ctx.opts.mapFiles and await fs.pathExists(expectedOut + ".map") ? expectedOut + ".map" : undefined }
 
         code .= ""
         mapJson .= null
@@ -105,9 +113,9 @@ export class BuildEngine
         // Use worker pool if available and concurrency allows, otherwise compile in-process.
         if (@ctx.opts.concurrency ?? 2) > 1 and @pool.poolAvailable
             try
-                logDebug("[COMPILE] Compiling with worker", file)
+                logDebug("[COMPILE] Compiling with worker", fileAbs)
                 // parseOpts is pre-sanitized in config.civet to be serializable. No need to re-sanitize.
-                workerResult := await @pool.exec({ file, content, isTsx, wantMap, parseOpts: parseOpts })
+                workerResult := await @pool.exec({ file: fileAbs, content, isTsx, wantMap, parseOpts: parseOpts })
                 if workerResult.ok
                     code = rewriteCivetImports(workerResult.code)
                     mapJson = workerResult.mapJson
@@ -128,9 +136,9 @@ export class BuildEngine
                 if wantMap and compileResult.sourceMap?
                     mapJson = compileResult.sourceMap.json(file, expectedOut)
         else
-            logDebug("[COMPILE] Compiling in-process", file)
+            logDebug("[COMPILE] Compiling in-process", fileAbs)
             compileOpts := {
-                filename: file,
+                filename: fileAbs,
                 ...(wantMap ? { sourceMap: true } : {}),
                 ...(parseOpts ? { parseOptions: parseOpts } : {})
             }
@@ -140,12 +148,12 @@ export class BuildEngine
                 : rawResult as CivetCompileResult
             code = rewriteCivetImports(compileResult.code)
             if wantMap and compileResult.sourceMap?
-                mapJson = compileResult.sourceMap.json(file, expectedOut)
+                mapJson = compileResult.sourceMap.json(fileAbs, expectedOut)
 
-        // ensure cache stores latest content
-        @contentCache.set(file, content)
+        // ensure cache stores latest content (use absolute path for cache key)
+        @contentCache.set(fileAbs, content)
 
-        return await @_writeOutputAndGetResult(file, isTsx, code, mapJson, signature)
+        return await @_writeOutputAndGetResult(fileAbs, isTsx, code, mapJson, signature)
 
     // Handles writing the output of a successful compilation to disk.
     // This is now an internal method of the engine.

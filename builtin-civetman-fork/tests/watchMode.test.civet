@@ -70,17 +70,20 @@ describe "Civetman Watch – basic rebuild", ->
 
         // Wait until watcher is ready
         await waitFor("Watching for changes")
+        // Add a small delay to ensure chokidar has fully initialized on all platforms
+        await new Promise((resolve) => setTimeout(resolve, 500))
 
     afterAll async ->
         if watcher
             // On Windows, a simple kill() isn't enough. We need to be more forceful
             // and ensure we wait for the process to actually exit.
-            if watcher.stdout then watcher.stdout.destroy()
-            if watcher.stderr then watcher.stderr.destroy()
+            currentWatcher := watcher
+            if currentWatcher.stdout then currentWatcher.stdout.destroy()
+            if currentWatcher.stderr then currentWatcher.stderr.destroy()
             
-            watcher.kill('SIGKILL') // Use a more forceful signal
+            currentWatcher.kill('SIGKILL') // Use a more forceful signal
             
-            await new Promise((resolve) => watcher!.on('close', resolve))
+            await new Promise((resolve) => currentWatcher.on('close', resolve))
             watcher = null
 
         await new Promise((resolve) => setTimeout(resolve, 500)) // Extra pause before cleanup
@@ -101,23 +104,36 @@ describe "Civetman Watch – basic rebuild", ->
     , 25000) // Increased timeout for slow CI
 
     it("should update .gitignore when a new file is added", async ->
-        // 1) Get initial gitignore content
+        // 1) Ensure new-file doesn't exist from previous runs
+        newCivetFile := path.join(testDir, "new-file.civet")
+        newTsFile := path.join(testDir, "new-file.ts")
+        if await fs.pathExists(newCivetFile)
+            await fs.unlink(newCivetFile)
+        if await fs.pathExists(newTsFile)
+            await fs.unlink(newTsFile)
+        
+        // 2) Get initial gitignore content (should not have new-file.ts)
         gitignorePath := path.join(testDir, ".gitignore")
         initialGitignore := await fs.readFile(gitignorePath, 'utf8')
         expect(initialGitignore.includes("new-file.ts")).toBe(false)
         
-        // 2) Add a new file
-        newCivetFile := path.join(testDir, "new-file.civet")
-        newTsFile := path.join(testDir, "new-file.ts")
+        // 3) Add a new file
         await fs.writeFile(newCivetFile, "export const newContent = 123")
         
-        // 3) Wait for it to be built
+        // 4) Wait for it to be built
         await waitFor("✓ new-file.civet -> new-file.ts", 15000)
         expect(await fs.pathExists(newTsFile)).toBe(true)
         
-        // 4) Check gitignore again - wait for debounced sync
-        await new Promise((resolve) => setTimeout(resolve, 1000))
-        finalGitignore := await fs.readFile(gitignorePath, 'utf8')
+        // 5) Check gitignore again - wait for file system sync with retry (Windows file system caching)
+        // Use explicit let declarations for cross-environment compatibility (Civet/TypeScript/Bun)
+        let finalGitignore: string = ""
+        let found: boolean = false
+        for attempt of [0..9]
+            await new Promise((resolve) => setTimeout(resolve, 300))
+            finalGitignore = await fs.readFile(gitignorePath, 'utf8')
+            if finalGitignore.includes("new-file.ts")
+                found = true
+                break
         
-        expect(finalGitignore.includes("new-file.ts")).toBe(true)
+        expect(found).toBe(true)
     , 25000)

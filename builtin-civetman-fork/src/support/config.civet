@@ -68,7 +68,7 @@ export loadCivetConfigContent := async (cwd: string): Promise<{ configContent: s
     // Parse config content directly to avoid potential caching issues in loadCivetConfig
     // This is critical for tests that modify config and expect an immediate change.
     cachedParseOpts := if configContent
-        errors: ParseError[] .= []
+        errors: ParseError[] := []
         // Parse the config and immediately sanitize it to a plain JSON object.
         // This prevents non-serializable data (like functions) from ever
         // entering our build context, fixing DataCloneError in worker threads.

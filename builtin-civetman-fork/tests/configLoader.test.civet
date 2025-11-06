@@ -1,0 +1,41 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import fs from 'fs-extra'
+import path from 'node:path'
+import os from 'node:os'
+import { loadCivetmanConfig } from '../src/config/loader'
+
+let tempDir = ''
+
+describe 'Config Loader', ->
+  beforeEach async ->
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'civetman-config-'))
+  afterEach async ->
+    if tempDir and await fs.pathExists(tempDir)
+      await fs.remove(tempDir)
+    return
+
+  it 'loads civetman.config.json', async ->
+    cfgPath := path.join(tempDir, 'civetman.config.json')
+    await fs.writeFile(cfgPath, JSON.stringify({ outDir: 'out', rules: [{ test: '**/*.civet', extension: '.ts' }] }))
+    res := await loadCivetmanConfig(tempDir)
+    expect(res.path?.endsWith('civetman.config.json')).toBe(true)
+    expect(res.config?.outDir).toBe('out')
+    expect(res.config?.rules?.length).toBe(1)
+    return
+
+  it 'loads civetman.config.js default export', async ->
+    cfgPath := path.join(tempDir, 'civetman.config.js')
+    await fs.writeFile(cfgPath, `export default { rules: [{ test: "**/*.civet", extension: ".js" }] }`)
+    res := await loadCivetmanConfig(tempDir)
+    expect(!!res.config).toBe(true)
+    expect(res.config?.rules[0].extension).toBe('.js')
+    return
+
+  it 'loads civetman.config.ts with object literal default', async ->
+    cfgPath := path.join(tempDir, 'civetman.config.ts')
+    await fs.writeFile(cfgPath, `export default { rules: [{ test: "**/*.civet", extension: ".mts" }] }`)
+    res := await loadCivetmanConfig(tempDir)
+    expect(res.path?.endsWith('civetman.config.ts')).toBe(true)
+    expect(res.config?.rules[0].extension).toBe('.mts')
+    return
+

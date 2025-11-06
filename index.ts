@@ -1,4 +1,6 @@
 import type { ResolvedConfig, ViteDevServer, Plugin } from "vite";
+import type { SourceMapInput } from "rollup";
+import { compile, type CompileOptions } from "@danielx/civet";
 import {
   fork,
   type SpawnOptions,
@@ -7,6 +9,10 @@ import {
 import { createRequire } from "module";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { loadCivetmanConfig, loadBaseCivetCompileOptions } from "./builtin-civetman-fork/src/config/loader";
+import { resolveRule } from "./builtin-civetman-fork/src/rules/engine";
+import { rewriteCivetImports, rewriteEsmJsExtensions } from "./builtin-civetman-fork/src/support/import-rewriter";
+import type { CivetmanConfig } from "./builtin-civetman-fork/src/types";
 
 const requirePkg = createRequire(import.meta.url);
 // Determine current directory (dist) for built-in CLI
@@ -81,6 +87,9 @@ interface CivetmanOptions {
  */
 export function civetman(options: CivetmanOptions = {}): Plugin {
   let config: ResolvedConfig;
+  let cachedBase: CompileOptions | null = null;
+  let cachedCfgPath: string | null = null;
+  let civetmanConfig: CivetmanConfig | null = null;
   const pluginOpts = {
     tsx: false,
     gitIgnore: true,
@@ -151,9 +160,57 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
     configResolved(resolvedConfig: ResolvedConfig) {
       console.log('vite plugin')
       config = resolvedConfig;
+      // Preload configs for transform pipeline
+      (async () => {
+        const { config: loaded } = await loadCivetmanConfig(process.cwd());
+        civetmanConfig = loaded ?? { rules: [{ test: "**/*.civet", extension: ".ts" }] };
+        cachedBase = await loadBaseCivetCompileOptions(process.cwd());
+      })().catch(() => void 0)
+    },
+    async transform(code: string, id: string) {
+      if (!id.endsWith('.civet')) return null;
+      const cwd = process.cwd();
+      if (!cachedBase) {
+        cachedBase = await loadBaseCivetCompileOptions(cwd);
+      }
+      if (!civetmanConfig) {
+        const { config: loaded } = await loadCivetmanConfig(cwd);
+        civetmanConfig = loaded ?? { rules: [{ test: "**/*.civet", extension: ".ts" }] };
+      }
+      const resolution = resolveRule(id, cwd, civetmanConfig, cachedBase);
+      const extension = resolution?.extension ?? '.ts';
+      const finalOptions: CompileOptions = resolution?.finalOptions ?? { js: false };
+      // Always request a source map for better DX in Vite
+      finalOptions.sourceMap = true;
+      const raw = await compile(code, finalOptions);
+      const compiled: { code: string; sourceMap?: { json: (src: string, out: string) => string } } =
+        typeof raw === 'string' ? { code: raw } : raw;
+      let outCode = compiled.code;
+      outCode = rewriteCivetImports(outCode);
+      const isEsm = resolution?.module === 'esm';
+      const isJsLike = extension === '.js' || extension === '.mjs' || extension === '.cjs' || extension === '.jsx';
+      if (isEsm && isJsLike) {
+        outCode = rewriteEsmJsExtensions(outCode);
+      }
+      let map: SourceMapInput | undefined = undefined;
+      if (compiled.sourceMap && typeof compiled.sourceMap.json === 'function') {
+        try {
+          const outFile = id.replace(/\.civet$/, extension);
+          map = JSON.parse(compiled.sourceMap.json(id, outFile));
+        } catch {}
+      }
+      return { code: outCode, map };
     },
     async buildStart() {
       if (config.command == "build") {
+        // Skip running CLI if we're building the CLI itself (circular dependency)
+        const cwd = process.cwd();
+        const isBuildingCli = cwd.includes("builtin-civetman-fork") || 
+                              config.root.includes("builtin-civetman-fork");
+        if (isBuildingCli) {
+          // When building the CLI, just transform .civet files, don't run the CLI
+          return;
+        }
         // Launch Civet compiler for production build
         const child = runCivetmanCli("build", getFlags());
         try {

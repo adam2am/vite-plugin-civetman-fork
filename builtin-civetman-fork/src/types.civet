@@ -70,3 +70,26 @@ export type CivetStructuredError =
     body?: string
     message?: string
 
+// --------------------------------------------------------------
+// Rules Engine Types
+// --------------------------------------------------------------
+
+export type ModuleHint = "esm" | "commonjs"
+
+export type Rule =
+    test: string | RegExp
+    extension: ".js" | ".mjs" | ".cjs" | ".jsx" | ".ts" | ".tsx" | ".mts" | ".cts"
+    module?: ModuleHint
+    outDir?: string
+    compilerOptions?: import("@danielx/civet").CompileOptions
+
+export type CivetmanConfig =
+    rules: Rule[]
+    outDir?: string
+    baseCompilerOptions?: import("@danielx/civet").CompileOptions
+
+jsExtensions := new Set([".js", ".mjs", ".cjs", ".jsx"])
+
+export inferJsFromExtension := (ext: Rule["extension"]): boolean =>
+    jsExtensions.has(ext)
+

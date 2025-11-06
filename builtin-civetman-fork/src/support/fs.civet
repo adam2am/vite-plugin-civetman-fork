@@ -7,8 +7,8 @@ path from "node:path"
 { randomUUID } from "node:crypto"
 glob from "fast-glob"
 
-// Import logDebug from utils
-import { logDebug } from "./utils.civet"
+// Import logDebug and toPosix from utils
+import { logDebug, toPosix } from "./utils.civet"
 
 // Remove stray *.civetmantmp files that belong to our outputs
 export cleanupTmpFiles := async (cwd: string) =>
@@ -41,8 +41,13 @@ export safeWrite := async (filePath: string, data: string | Buffer) =>
             return // Success
         catch (err: unknown)
             // Check for specific Windows file lock errors
-            if (err as any).code in ['EPERM', 'EBUSY'] and attempt < 5
-                logDebug(`[safeWrite] Rename failed on attempt ${attempt}, retrying...`, { to: filePath, code: (err as any).code })
+            isRetryable := err instanceof Error && 
+                           'code' in err && 
+                           typeof err.code === 'string' && 
+                           ['EPERM', 'EBUSY'].includes(err.code)
+            if isRetryable and attempt < 5
+                errCode := (err as NodeJS.ErrnoException).code
+                logDebug(`[safeWrite] Rename failed on attempt ${attempt}, retrying...`, { to: filePath, code: errCode })
                 await new Promise((resolve) => setTimeout(resolve, 100 * attempt)) // Incremental backoff
             else
                 // Clean up temp file before throwing
@@ -56,6 +61,7 @@ export safeWrite := async (filePath: string, data: string | Buffer) =>
 
 // Reads a .jsonl file and reconstructs the latest state for each key.
 // The last entry for any given file path wins.
+// Normalizes all keys to POSIX format for cross-platform consistency.
 export loadHashesFromJSONL := 
     async (filePath: string): Promise<Record<string, { sig: string, outFile: string }>> => 
         try
@@ -69,7 +75,11 @@ export loadHashesFromJSONL :=
                 if !line.trim() continue
                 try
                     entry := JSON.parse(line) as HashEntry
-                    map[entry.file] = { sig: entry.sig, outFile: entry.outFile }
+                    // Normalize keys to POSIX to handle old Windows-format entries
+                    // Entry.file and entry.outFile are already relative paths from when they were saved
+                    normalizedKey := toPosix(entry.file)
+                    normalizedOutFile := toPosix(entry.outFile)
+                    map[normalizedKey] = { sig: entry.sig, outFile: normalizedOutFile }
                 catch (err: unknown)
                     logDebug("[JSONL] Skipping corrupted line in hashes.jsonl", { line, err })
             return map

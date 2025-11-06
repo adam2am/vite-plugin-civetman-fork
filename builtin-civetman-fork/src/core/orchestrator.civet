@@ -27,14 +27,17 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
     userIgnores := (opts.ignoreFolders ?? []).map((d) => path.join(d, "**"))
     ignorePatterns := [...baseIgnores, ...userIgnores].map(toPosix)
 
-    sources := await glob(globPatterns, ignore: ignorePatterns, cwd: cwd, caseSensitiveMatch: false)
+    sourcesRaw := await glob(globPatterns, ignore: ignorePatterns, cwd: cwd, caseSensitiveMatch: false)
+    // glob returns relative paths when cwd is set, but we need absolute paths for file operations
+    // Convert to absolute paths for consistency
+    sources := sourcesRaw.map((relPath: string) => path.resolve(cwd, relPath))
 
     // Step 2: load previous state and create context
     // Load Civet config once and cache its parseOptions for the whole build run
     { configContent, parseOpts } := await loadCivetConfigContent(cwd)
 
     { prevGenerated, prevHashes } := await loadPrevState(cwd)
-    ctx: BuildContext .=
+    ctx: BuildContext :=
         opts: opts,
         cwd: cwd,
         sources: sources,
@@ -60,18 +63,33 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
     let skippedCount = 0
 
     for res of results
+        // res.file and res.outFile are always absolute paths from engine
         if res.status == 'built'
             builtCount++
             ctx.outFiles.add(res.outFile)
             if res.mapFile
                 ctx.outFiles.add(res.mapFile)
-            ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
+            // Normalize keys and values to POSIX for stable cache across platforms
+            // Use relative paths for consistent keys across different working directories
+            fileRel := path.relative(ctx.cwd, res.file)
+            outRel := path.relative(ctx.cwd, res.outFile)
+            key := toPosix(fileRel)
+            out := toPosix(outRel)
+            ctx.newHashes[key] = { sig: res.signature, outFile: out }
         else if res.status == 'skip'
             skippedCount++
             ctx.outFiles.add(res.outFile)
             if res.mapFile
                 ctx.outFiles.add(res.mapFile)
-            ctx.newHashes[res.file] = { sig: res.signature, outFile: res.outFile }
+            // When a file is skipped, preserve its hash in newHashes to ensure it's saved.
+            // Use the signature from the result (which matches prevHashes) and normalize paths.
+            fileRel := path.relative(ctx.cwd, res.file)
+            outRel := path.relative(ctx.cwd, res.outFile)
+            key := toPosix(fileRel)
+            out := toPosix(outRel)
+            // Prefer existing entry from prevHashes if it exists (preserves any metadata),
+            // otherwise create new entry from the result
+            ctx.newHashes[key] = ctx.prevHashes[key] ?? { sig: res.signature, outFile: out }
         else if res.status == 'error'
             hadError = true
         logCompileResult(spinner, res)

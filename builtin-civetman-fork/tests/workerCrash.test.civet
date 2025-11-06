@@ -17,8 +17,8 @@ makeTempFile := async (dir: string, name: string, content: string) ->
 
 // Resolve compiled worker script path from dist (no copying into src)
 resolveWorkerPath := async () ->
-    // Prefer top-level dist/cli/workers for package run
-    candidate := path.join(__dirname, '..', '..', 'dist', 'cli', 'workers', 'compileWorker.cjs')
+    // Look in builtin-civetman-fork/dist/workers/compileWorker.cjs
+    candidate := path.join(__dirname, '..', 'dist', 'workers', 'compileWorker.cjs')
     if await fs.pathExists(candidate) then candidate else candidate
 
 describe "WorkerPool – crash recovery", () =>
@@ -50,14 +50,7 @@ describe "WorkerPool – crash recovery", () =>
         expect(pool.idle.length).toBe(0)
 
         // The next compile should spawn a fresh worker and succeed
-        let res2: any
-        try {
-            res2 = await pool.exec({ file: file2, content: 'b: number := 2\nexport {}', isTsx: false, wantMap: false })
-        } catch (e) {
-            console.error("Second compilation failed after worker crash:", e)
-            // Force failure with the actual error logged above
-            expect(e).toBe(undefined)
-        }
+        res2 := await pool.exec({ file: file2, content: 'b: number := 2\nexport {}', isTsx: false, wantMap: false })
 
         expect(res2.ok).toBe(true)
         if res2.ok

@@ -13,14 +13,15 @@ import type { Options, BuildContext } from "../support/config.civet"
 import type { BuildEngine } from "./engine.civet"
 import { getSourcePaths, toPosix, logDebug } from "../support/utils.civet"
 import { logWatchEventBuilt, logWatchEventError, logWatchReady } from "../cli/ui.civet"
-import { addVscodeExcludes } from "../support/integrations.civet"
+import { syncIDEConfigs } from "../support/integrations.civet"
 import { cleanupTmpFiles } from "../support/fs.civet"
 import { saveNewState } from "./state.civet"
 
 // Create a chokidar watcher instance
 export createWatcher := (cwd: string, opts: Options) ->
     // Polling by default only in CI; can be overridden via --force-polling.
-    usePolling := opts.forcePolling || !!process.env.CI
+    // On Windows, enable polling by default for reliability
+    usePolling := opts.forcePolling || !!process.env.CI || process.platform === 'win32'
     // Build ignore patterns (same logic as build step)
     baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
     userIgnores := (opts.ignoreFolders || []).map((d: string) => path.join(d, "**"))
@@ -37,9 +38,9 @@ export createWatcher := (cwd: string, opts: Options) ->
         persistent: true,
         ignoreInitial: true,
         usePolling: usePolling,
-        interval: 100,
+        interval: usePolling ? 300 : 100,  // Longer interval for polling on Windows
         binaryInterval: 300,
-        awaitWriteFinish: {
+        awaitWriteFinish: usePolling ? false : {  // Disable awaitWriteFinish when polling (polling handles stability)
             stabilityThreshold: 100,
             pollInterval: 100
         }
@@ -104,7 +105,9 @@ export attachWatchHandlers := (watcher: FSWatcher,
             clearTimeout(existingTimer)
         timers.set(file, setTimeout(() =>
             timers.delete(file)
-            compileNow(file)
+            compileNow(file).catch((err: unknown) =>
+                console.error(c.red("  ✗ Error in watch rebuild"), err)
+            )
         , 100))
 
     compileNow := async (file: string) =>
@@ -119,12 +122,10 @@ export attachWatchHandlers := (watcher: FSWatcher,
             result := await engine.build(file)
             
             if result.status == 'built'
-                logDebug("[REBUILD_ONE] Built", file, "->", result.outFile)
                 logWatchEventBuilt(result.file, result.outFile)
             else if result.status == 'skip'
                 logDebug("[REBUILD_ONE] Skipped (up to date)", file)
             else if result.status == 'error'
-                logDebug("[REBUILD_ONE] Error compiling", file, result.error)
                 logWatchEventError(result.file, result.outFile, result.error)
             
             // Manually update context after a single file rebuild
@@ -132,10 +133,16 @@ export attachWatchHandlers := (watcher: FSWatcher,
                 ctx.outFiles.add(result.outFile)
                 if result.mapFile
                     ctx.outFiles.add(result.mapFile)
-                ctx.newHashes[result.file] = { sig: result.signature, outFile: result.outFile }
+                
+                // Use relative paths for keys to be consistent with the build orchestrator
+                fileRel := path.relative(ctx.cwd, result.file)
+                outRel := path.relative(ctx.cwd, result.outFile)
+                key := toPosix(fileRel)
+                out := toPosix(outRel)
+                ctx.newHashes[key] = { sig: result.signature, outFile: out }
             
-            // Immediately refresh VS Code excludes to minimise flicker
-            await addVscodeExcludes(ctx)
+            // Immediately refresh IDE configs (VS Code excludes and .gitignore) to minimise flicker
+            await syncIDEConfigs(ctx)
             
             saveStateAndSync()
         catch error
@@ -144,7 +151,6 @@ export attachWatchHandlers := (watcher: FSWatcher,
 
     watcher.on 'ready', ->
         logDebug("[WATCHER] Initial scan complete and ready for changes")
-        logDebug("[WATCHER] Watched paths:", watcher.getWatched())
         logWatchReady()
 
     watcher.on 'all', (event: string, changedPath: string) ->
@@ -157,28 +163,27 @@ export attachWatchHandlers := (watcher: FSWatcher,
     watcher.on "add", (abs: string) ->
         // Only react to source .civet files – ignore generated outputs
         unless abs.endsWith('.civet') return
-        file := path.relative(cwd, abs)
-        logDebug("[WATCHER_ADD] File added", file)
-        unless ctx.sources.includes(file)
-            ctx.sources.push file
-            logDebug("[WATCHER_ADD] Added to sources list", file)
-        scheduleRebuild(file)
+        // Use absolute path for consistency with build sources
+        logDebug("[WATCHER_ADD] File added", abs)
+        unless ctx.sources.includes(abs)
+            ctx.sources.push abs
+            logDebug("[WATCHER_ADD] Added to sources list", abs)
+        scheduleRebuild(abs)
 
     watcher.on "change", (abs: string) ->
         unless abs.endsWith('.civet') return
-        file := path.relative(cwd, abs)
-        logDebug("[WATCHER_CHANGE] File changed", file)
-        scheduleRebuild(file)
+        // Use absolute path for consistency
+        logDebug("[WATCHER_CHANGE] File changed", abs)
+        scheduleRebuild(abs)
 
     watcher.on "unlink", async (abs: string) =>
         unless abs.endsWith('.civet') return
-        file := path.relative(cwd, abs) 
-        
-        logDebug("[WATCHER_UNLINK] File removed", file)
+        // Use absolute path for consistency
+        logDebug("[WATCHER_UNLINK] File removed", abs)
         
         // Engine describes the changes, main loop applies them.
-        update := engine.createRemoveUpdate(file)
-        ctx.sources = ctx.sources.filter((sourceFile: string) => sourceFile !== file)
+        update := engine.createRemoveUpdate(abs)
+        ctx.sources = ctx.sources.filter((sourceFile: string) => sourceFile !== abs)
 
         // Perform file deletions
         for fileToDelete of update.filesToDelete

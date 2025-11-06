@@ -1,0 +1,76 @@
+path from "node:path"
+micromatch from "micromatch"
+import type { CompileOptions } from "@danielx/civet"
+import { toPosix } from "../support/utils.civet"
+import { inferJsFromExtension, type CivetmanConfig, type ModuleHint, type Rule } from "../types.civet"
+
+// Create a predicate that matches absolute or project-relative paths against a rule.test
+toMatcher := (test: string | RegExp): (absPath: string, cwd: string) => boolean =>
+	if test instanceof RegExp
+		(absPath: string) => test.test(toPosix(absPath))
+	else
+		pattern := String(test)
+		(absPath: string, cwd: string) =>
+			rel := path.relative(cwd, absPath)
+			posixAbs := toPosix(absPath)
+			posixRel := toPosix(rel)
+			micromatch.isMatch(posixRel, pattern) or micromatch.isMatch(posixAbs, pattern)
+
+// Simple deep merge for plain objects / arrays; later values win.
+deepMerge := <T>(base: T, override: Partial<T>): T =>
+	if base == null return override as T
+	if override == null return base
+	if Array.isArray(base) and Array.isArray(override)
+		return [...base, ...override] as unknown as T
+	if typeof base === "object" and typeof override === "object"
+		out: Record<string, unknown> := { ...(base as Record<string, unknown>) }
+		for [k, v] of Object.entries(override)
+			cur := (out as Record<string, unknown>)[k]
+			if Array.isArray(cur) and Array.isArray(v)
+				(out as Record<string, unknown>)[k] = [...cur, ...v]
+			else if cur and typeof cur === "object" and v and typeof v === "object"
+				(out as Record<string, unknown>)[k] = deepMerge(cur, v as Record<string, unknown>)
+			else
+				(out as Record<string, unknown>)[k] = v
+		return out as T
+	return override as T
+
+export type RuleResolution
+	rule: Rule
+	extension: ".js" | ".mjs" | ".cjs" | ".jsx" | ".ts" | ".tsx" | ".mts" | ".cts"
+	module?: ModuleHint
+	finalOptions: CompileOptions
+
+export resolveRule := (
+	file: string,
+	cwd: string,
+	config: CivetmanConfig,
+	baseCompileOptions: CompileOptions
+): RuleResolution | null =>
+	rules := config.rules ?? []
+	for r of rules
+		match := toMatcher(r.test)
+		unless match(file, cwd) continue
+		// Found the first match
+		extension := r.extension
+		ruleOpts := r.compilerOptions ?? {}
+		hasJs := Object.prototype.hasOwnProperty.call(ruleOpts as object, "js")
+		inferred := inferJsFromExtension(extension)
+		augmentedRuleOpts := if hasJs then ruleOpts else ({ ...(ruleOpts as object), js: inferred } as CompileOptions)
+		finalOptions := deepMerge(baseCompileOptions, augmentedRuleOpts)
+		return { rule: r, extension, module: r.module, finalOptions }
+	return null
+
+export computeOutPath := (
+	file: string,
+	cwd: string,
+	config: CivetmanConfig,
+	resolution: RuleResolution
+): string =>
+	outRoot := resolution.rule.outDir ?? config.outDir ?? "dist"
+	rel := path.relative(cwd, file)
+	dir := path.dirname(rel)
+	base := path.basename(rel, ".civet")
+	outDir := path.join(outRoot, dir)
+	path.join(outDir, base + resolution.extension)
+

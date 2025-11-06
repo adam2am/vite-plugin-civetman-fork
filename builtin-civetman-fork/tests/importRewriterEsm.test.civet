@@ -1,0 +1,35 @@
+import { describe, it, expect } from 'vitest'
+import { rewriteEsmJsExtensions } from '../src/support/import-rewriter.civet'
+
+describe 'rewriteEsmJsExtensions', ->
+  it 'adds .js to relative bare imports', ->
+    code := """import { x } from './mod'
+import y from "../utils/index"
+"""
+    out := rewriteEsmJsExtensions(code)
+    expect(out.includes("from './mod.js'")).toBe(true)
+    expect(out.includes('from "../utils/index.js"')).toBe(true)
+    return
+
+  it 'skips type-only imports', ->
+    code := """import type { T } from './types'
+export type { T2 } from "../defs/index"
+"""
+    out := rewriteEsmJsExtensions(code)
+    expect(out.includes("from './types.js'")).toBe(false)
+    expect(out.includes('from "../defs/index.js"')).toBe(false)
+    return
+
+  it 'does not touch bare specifiers or already-suffixed imports', ->
+    code := """import foo from 'pkg'
+import './polyfill.js'
+import { a } from './a.ts'
+import { b } from './b.jsx'
+"""
+    out := rewriteEsmJsExtensions(code)
+    expect(out.includes("from 'pkg'")).toBe(true)
+    expect(out.includes("'./polyfill.js'")).toBe(true)
+    expect(out.includes("'./a.ts'")).toBe(true)
+    expect(out.includes("'./b.jsx'")).toBe(true)
+    return
+

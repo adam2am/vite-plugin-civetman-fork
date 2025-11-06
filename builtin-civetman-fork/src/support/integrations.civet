@@ -3,7 +3,7 @@
 // ──────────────────────────────────────────────────────────────
 
 fs from "fs-extra"
-{ join } from "node:path"
+{ join, relative } from "node:path"
 import type { ParseError } from "jsonc-parser"
 { parseTree as jsoncParseTree, findNodeAtLocation as jsoncFindNodeAtLocation, getNodeValue as jsoncGetNodeValue, modify as jsoncModify, applyEdits as jsoncApplyEdits } from "jsonc-parser"
 import { toPosix } from "./utils.civet"
@@ -65,8 +65,8 @@ export addVscodeExcludes := async (ctx: BuildContext) =>
     , {})
 
     newExclude := if ctx.opts.vscodeHide
-        // Normalize paths to POSIX for cross-platform .vscode/settings.json
-        dynamic := files.reduce((acc: Record<string, boolean>, f: string) => ({ ...acc, [toPosix(f)]: true }), {})
+        // Convert absolute paths to relative paths, then normalize to POSIX for cross-platform .vscode/settings.json
+        dynamic := files.reduce((acc: Record<string, boolean>, f: string) => ({ ...acc, [toPosix(relative(ctx.cwd, f))]: true }), {})
         dynamic[tmpGlob] = true
         { 
           ...manual, 
@@ -77,8 +77,8 @@ export addVscodeExcludes := async (ctx: BuildContext) =>
         // When disabled, remove all managed entries
         manual
 
-    // Store managed files metadata separately (normalized to POSIX)
-    managedMetadata := if ctx.opts.vscodeHide then files.map(toPosix) else undefined
+    // Store managed files metadata separately (convert to relative paths, then normalize to POSIX)
+    managedMetadata := if ctx.opts.vscodeHide then files.map((f: string) => toPosix(relative(ctx.cwd, f))) else undefined
 
     edits := jsoncModify(content, [configKey], newExclude, { formattingOptions: { insertSpaces: true, tabSize: 2 } })
     newContent .= jsoncApplyEdits(content, edits)
@@ -123,9 +123,9 @@ export addGitignoreEntries := async (ctx: BuildContext) =>
         nonManagedLines.pop()
     
     // Create the new managed block, sorted for determinism
-    // Normalize paths to POSIX for cross-platform .gitignore
+    // Convert absolute paths to relative paths, then normalize to POSIX for cross-platform .gitignore
     managedBlock := if ctx.opts.gitIgnore
-        [startMarker, ...[...ctx.outFiles].map(toPosix).sort(), endMarker].join('\n')
+        [startMarker, ...[...ctx.outFiles].map((file: string) => toPosix(relative(ctx.cwd, file))).sort(), endMarker].join('\n')
     else
         ""
 

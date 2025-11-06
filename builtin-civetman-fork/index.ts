@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import main from "./src/cli/index.civet"
-import { rewriteCivetImports } from "./src/support/import-rewriter.civet"
+import main from "./src/cli/index"
+import { rewriteCivetImports } from "./src/support/import-rewriter"
 
 // Export the rewriter function for testing
 export { rewriteCivetImports }

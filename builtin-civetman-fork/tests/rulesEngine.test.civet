@@ -1,0 +1,80 @@
+import { describe, it, expect } from 'vitest'
+import { resolveRule, computeOutPath } from '../src/rules/engine.civet'
+
+describe 'Rules Engine', ->
+  it 'first-match wins with glob ordering', ->
+    cwd := process.cwd()
+    file := cwd + '/src/components/Button.civet'
+    base := { js: false }
+    cfg := {
+      rules: [
+        { test: '**/*.civet', extension: '.ts' },
+        { test: 'src/components/**/*.civet', extension: '.tsx' },
+      ]
+    }
+    res := resolveRule(file, cwd, cfg, base)
+    expect(res?.extension).toBe('.ts')
+    return
+
+  it 'more specific rule should be placed first', ->
+    cwd := process.cwd()
+    file := cwd + '/src/components/Button.civet'
+    base := { js: false }
+    cfg := {
+      rules: [
+        { test: 'src/components/**/*.civet', extension: '.tsx' },
+        { test: '**/*.civet', extension: '.ts' },
+      ]
+    }
+    res := resolveRule(file, cwd, cfg, base)
+    expect(res?.extension).toBe('.tsx')
+    return
+
+  it 'infers js flag from extension when not provided', ->
+    cwd := process.cwd()
+    file := cwd + '/scripts/run.civet'
+    base := { js: false }
+    cfg := { rules: [{ test: 'scripts/**/*.civet', extension: '.js' }] }
+    res := resolveRule(file, cwd, cfg, base)
+    expect(res?.finalOptions?.js).toBe(true)
+    return
+
+  it 'explicit js override wins over inference', ->
+    cwd := process.cwd()
+    file := cwd + '/src/legacy/code.civet'
+    base := { js: false }
+    cfg := { rules: [{ test: 'src/legacy/**/*.civet', extension: '.ts', compilerOptions: { js: true } }] }
+    res := resolveRule(file, cwd, cfg, base)
+    expect(res?.finalOptions?.js).toBe(true)
+    return
+
+  it 'deep merges base options with rule options', ->
+    cwd := process.cwd()
+    file := cwd + '/src/app/main.civet'
+    base := { js: false, parseOptions: { jsx: 'react-jsx' } }
+    cfg := { rules: [{ test: 'src/app/**/*.civet', extension: '.tsx', compilerOptions: { parseOptions: { jsxImportSource: 'react' } } }] }
+    res := resolveRule(file, cwd, cfg, base)
+    expect(res?.finalOptions?.parseOptions?.jsx).toBe('react-jsx')
+    expect(res?.finalOptions?.parseOptions?.jsxImportSource).toBe('react')
+    return
+
+  it 'computes out path using rule outDir or config outDir', ->
+    cwd := process.cwd()
+    file := cwd + '/src/app/main.civet'
+    base := { js: false }
+    cfg := { outDir: 'dist', rules: [{ test: 'src/app/**/*.civet', extension: '.js' }] }
+    res := resolveRule(file, cwd, cfg, base)
+    expect(res).not.toBeNull()
+    if res
+      out := computeOutPath(file, cwd, cfg, res)
+      // normalize to forward slashes for cross-platform test
+      expect(out.replace(/\\/g, '/').endsWith('dist/src/app/main.js')).toBe(true)
+    // per-rule outDir wins
+    cfg2 := { outDir: 'dist', rules: [{ test: 'src/app/**/*.civet', extension: '.js', outDir: 'build' }] }
+    res2 := resolveRule(file, cwd, cfg2, base)
+    expect(res2).not.toBeNull()
+    if res2
+      out2 := computeOutPath(file, cwd, cfg2, res2)
+      expect(out2.replace(/\\/g, '/').endsWith('build/src/app/main.js')).toBe(true)
+    return
+
