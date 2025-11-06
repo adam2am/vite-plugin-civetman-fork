@@ -170,9 +170,7 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
     async transform(code: string, id: string) {
       if (!id.endsWith('.civet')) return null;
       const cwd = process.cwd();
-      if (!cachedBase) {
-        cachedBase = await loadBaseCivetCompileOptions(cwd);
-      }
+      cachedBase ??= await loadBaseCivetCompileOptions(cwd);
       if (!civetmanConfig) {
         const { config: loaded } = await loadCivetmanConfig(cwd);
         civetmanConfig = loaded ?? { rules: [{ test: "**/*.civet", extension: ".ts" }] };

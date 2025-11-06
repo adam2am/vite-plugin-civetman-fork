@@ -17,6 +17,7 @@ export default defineConfig({
 		vscodeHide: true,
 		inlineMap: 'full',
 		mapFiles: false,
+		force: true,
 		ignoreFolders: ['node_modules', 'dist'],
 	}) as PluginOption],
 }) 

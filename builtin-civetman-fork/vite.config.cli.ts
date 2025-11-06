@@ -8,8 +8,8 @@ export default defineConfig({
     outDir: 'dist',
     lib: {
       entry: {
-        'index': './index.civet',
-        'workers/compileWorker': './src/worker/compile.worker.civet',
+        'index': './index.ts',
+        'workers/compileWorker': './src/worker/compile.worker.ts',
       },
       formats: ["es", "cjs"],
       fileName: (format, entryName) => format === 'es' ? `${entryName}.js` : `${entryName}.cjs`
@@ -31,6 +31,5 @@ export default defineConfig({
         /node:.*/gi,
       ],
     },
-  },
-  plugins: [],
+  }
 }) 

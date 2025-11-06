@@ -32,8 +32,8 @@ export class BuildEngine
         @contentCache = new Map<string, string>()
 
     // Build / rebuild *all* sources currently in ctx.sources
-    async buildAll(): Promise<CompileResult[]>
-        tasks := @ctx.sources.map (file) => @build(file)
+    async buildAll(onProgress?: (result: CompileResult) => void): Promise<CompileResult[]>
+        tasks := @ctx.sources.map (file) => @build(file, onProgress)
         results := await Promise.allSettled(tasks)
         // Flatten settled results, handling potential top-level errors from build()
         compiledResults: CompileResult[] := []
@@ -213,5 +213,3 @@ export class BuildEngine
             filesToDelete: [tsFile, tsxFile, `${tsFile}.map`, `${tsxFile}.map`],
             hashesToDelete: [file]
         }
-    
-

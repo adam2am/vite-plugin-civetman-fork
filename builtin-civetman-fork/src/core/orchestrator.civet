@@ -14,7 +14,8 @@ import { loadCivetConfigContent } from "../support/config.civet"
 import { loadPrevState, saveNewState, pruneStaleOutputs } from "./state.civet"
 import { syncIDEConfigs } from "../support/integrations.civet"
 import { cleanupTmpFiles } from "../support/fs.civet"
-import { startBuildSpinner, logCompileResult, reportBuildResult } from "../cli/ui.civet"
+import { startBuildSpinner, reportBuildResult, logWatchEventBuilt, logWatchEventError } from "../cli/ui.civet"
+import c from "picocolors"
 
 // Top-level build function that orchestrates the entire build process
 export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: string, throwOnError: boolean = true): Promise<{ ctx: BuildContext, engine: BuildEngine, hadError: boolean }> =>
@@ -51,21 +52,31 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
     // Create the build engine which orchestrates compilation.
     engine := new BuildEngineClass(ctx, workerScriptPath)
 
-    // Step 3: build all, with progress reporting
+    // Step 3: build all, with real-time progress reporting
     spinner := startBuildSpinner()
-    
-    // The engine does all the work and returns the results.
-    results := await engine.buildAll()
-
-    // Step 4: Process results, update state, and report to UI
     let hadError = false
     let builtCount = 0
     let skippedCount = 0
 
+    onProgress := (res: CompileResult) =>
+        spinner.stop()
+        if res.status is 'built'
+            logWatchEventBuilt(res.file, res.outFile)
+            builtCount++
+        else if res.status is 'skip'
+            skippedCount++
+        else if res.status is 'error'
+            logWatchEventError(res.file, res.outFile, res.error)
+            hadError = true
+        spinner.text = c.blue(`Building... (${builtCount + skippedCount}/${ctx.sources.length})`)
+        spinner.start()
+
+    results := await engine.buildAll(onProgress)
+
+    // Step 4: Process final results to update state
     for res of results
         // res.file and res.outFile are always absolute paths from engine
         if res.status == 'built'
-            builtCount++
             ctx.outFiles.add(res.outFile)
             if res.mapFile
                 ctx.outFiles.add(res.mapFile)
@@ -77,7 +88,6 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
             out := toPosix(outRel)
             ctx.newHashes[key] = { sig: res.signature, outFile: out }
         else if res.status == 'skip'
-            skippedCount++
             ctx.outFiles.add(res.outFile)
             if res.mapFile
                 ctx.outFiles.add(res.mapFile)
@@ -91,8 +101,7 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
             // otherwise create new entry from the result
             ctx.newHashes[key] = ctx.prevHashes[key] ?? { sig: res.signature, outFile: out }
         else if res.status == 'error'
-            hadError = true
-        logCompileResult(spinner, res)
+            // Error is already handled by onProgress
     
     reportBuildResult(spinner, hadError, builtCount, skippedCount)
 

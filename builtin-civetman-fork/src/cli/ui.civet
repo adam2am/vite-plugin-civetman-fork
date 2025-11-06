@@ -6,6 +6,7 @@ c from "picocolors"
 ora from "ora"
 import type { Ora } from "ora"
 import type { CompileResult } from "../types.civet"
+import path from "node:path"
 import { formatErrorForDisplay, logDebug } from "../support/utils.civet"
 
 // Create and start a build spinner
@@ -23,21 +24,9 @@ export reportBuildResult := (spinner: Ora, hadError: boolean, builtCount: number
     else
         spinner.fail(c.red(`Build failed. ${finalMessage}`))
 
-// Log a single compilation result
-export logCompileResult := (spinner: Ora, res: CompileResult) =>
-    if res.status == 'built'
-        spinner.succeed(c.cyan(res.file) + " -> " + c.green(res.outFile))
-    else if res.status == 'skip'
-        // Silent for skips
-        return
-    else if res.status == 'error'
-        spinner.fail(c.red(`Error compiling ${res.file}`) + ` (stub written to ${c.yellow(res.outFile)})`)
-        console.error(formatErrorForDisplay(res.error))
-
 // Log watch mode events
 export logWatchEventBuilt := (file: string, outFile: string) =>
     // Use relative paths for cleaner output (just filename if in cwd, or relative path)
-    path from "node:path"
     fileRel := path.isAbsolute(file) ? path.relative(process.cwd(), file) : file
     outRel := path.isAbsolute(outFile) ? path.relative(process.cwd(), outFile) : outFile
     // Normalize to POSIX for consistent output
