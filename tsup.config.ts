@@ -5,7 +5,8 @@ export default defineConfig({
 	format: "esm",
 	outDir: "./dist",
 	entry: ["./index.ts"],
-	clean: true,
+	// Preserve Vite-built CLI artifacts in dist/cli
+	clean: false,
 	dts: true,
 	minify: false,
 	sourcemap: true,

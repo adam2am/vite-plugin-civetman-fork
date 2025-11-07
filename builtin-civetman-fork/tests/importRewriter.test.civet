@@ -170,7 +170,6 @@ import { real } from "./actual${ext}"`
   describe 'rewriteCivetImports', () ->
     it 'should rewrite single .civet import', ->
       ext := '.civet'
-      a := 123;
       input := `import { foo } from "./module${ext}"`
       result := rewriteCivetImports(input)
       expect(result).toBe('import { foo } from "./module"')

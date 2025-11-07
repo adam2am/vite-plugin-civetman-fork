@@ -51,7 +51,11 @@ function runCivetmanCli(command: "dev" | "build", flags: string[] = [], opt: Spa
   const cliPath = getCivetmanCliPath();
   const program = fork(cliPath, [command, ...flags], {
     stdio: ["inherit", "inherit", "inherit", "ipc"],
-    env: { PATH: process.env.PATH, FORCE_COLOR: "1" },
+    env: { 
+      ...process.env,
+      PATH: process.env.PATH, 
+      FORCE_COLOR: "1" 
+    },
     cwd: process.cwd(),
     ...opt,
   });
@@ -88,7 +92,6 @@ interface CivetmanOptions {
 export function civetman(options: CivetmanOptions = {}): Plugin {
   let config: ResolvedConfig;
   let cachedBase: CompileOptions | null = null;
-  let cachedCfgPath: string | null = null;
   let civetmanConfig: CivetmanConfig | null = null;
   const pluginOpts = {
     tsx: false,

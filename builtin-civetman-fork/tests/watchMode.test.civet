@@ -91,12 +91,24 @@ describe "Civetman Watch – basic rebuild", ->
 
     it("should build initially and after a change", async ->
         // 1) Initial build verification
+        // The watcher has already started in beforeAll and should have done the initial build
+        // Wait a bit longer to ensure the file system has written the initial .ts file
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+        
+        // Verify the file exists and has the expected content
+        existsCheck := await fs.pathExists(tsPath)
+        if !existsCheck
+            throw new Error(`Expected ${tsPath} to exist after initial build`)
+        
         content1 := await fs.readFile(tsPath, 'utf8')
         expect(content1.includes("const a: number = 1")).toBe(true)
 
         // 2) Trigger a change
         await fs.writeFile(civetPath, "a: number := 2\nexport {}")
         await waitFor("✓ dummy.civet -> dummy.ts", 15000)
+        
+        // Small delay to ensure file system has synced after rebuild
+        await new Promise((resolve) => setTimeout(resolve, 300))
 
         // 3) Confirm rebuild output
         content2 := await fs.readFile(tsPath, 'utf8')
@@ -128,7 +140,7 @@ describe "Civetman Watch – basic rebuild", ->
         // Use explicit let declarations for cross-environment compatibility (Civet/TypeScript/Bun)
         let finalGitignore: string = ""
         let found: boolean = false
-        for attempt of [0..9]
+        for _attempt of [0..9]
             await new Promise((resolve) => setTimeout(resolve, 300))
             finalGitignore = await fs.readFile(gitignorePath, 'utf8')
             if finalGitignore.includes("new-file.ts")

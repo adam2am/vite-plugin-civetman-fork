@@ -6,6 +6,7 @@ import { compile } from "@danielx/civet"
 import fs from "node:fs/promises"
 import type { CompileWorkerPayload, CivetCompileResult } from "../types.civet"
 import type { CompileWorkerResult } from "../types.civet"
+import { normalizeSourceMap } from "../support/utils.civet"
 
 // This script must be run as a worker.
 pp := parentPort
@@ -28,10 +29,12 @@ pp.on "message", async (msg: CompileWorkerPayload) =>
         
         // The outFile path is needed to correctly generate the source map.
         outFile := file.replace('.civet', isTsx ? '.tsx' : '.ts')
-        mapJson := if wantMap && sourceMap then sourceMap.json(file, outFile) else null
+        // Normalize to a JSON string (or null), guaranteed cloneable
+        mapJson := if wantMap && sourceMap then normalizeSourceMap(sourceMap.json(file, outFile)) else null
 
         // Send the successful result back to the main thread.
-        successResult: CompileWorkerResult := { ok: true, code, mapJson }
+        // Ensure we're sending primitives only - no object references
+        successResult: CompileWorkerResult := { ok: true, code: String(code), mapJson }
         pp.postMessage(successResult)
     catch error
         // If compilation fails, send an error message back.

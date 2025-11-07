@@ -154,3 +154,10 @@ export debounce := <T extends unknown[]>(func: (...args: T) => void, timeout = 3
             timer = null
         }, timeout)
 
+// --- Source map normalization ---
+// Always return a JSON string or null; never an object
+export normalizeSourceMap := (map: unknown): string | null =>
+    if map is null or map is undefined then null
+    else if typeof map is 'string' then map as string
+    else JSON.stringify(map)
+

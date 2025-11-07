@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+
 import main from "./src/cli/index"
 import { rewriteCivetImports } from "./src/support/import-rewriter"
 
@@ -6,3 +6,4 @@ import { rewriteCivetImports } from "./src/support/import-rewriter"
 export { rewriteCivetImports }
 
 main()
+

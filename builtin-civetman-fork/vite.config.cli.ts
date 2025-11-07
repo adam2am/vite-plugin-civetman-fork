@@ -5,7 +5,8 @@ export default defineConfig({
   plugins: [civetman()],
   build: {
     ssr: true,
-    outDir: 'dist',
+    // Emit directly to the repository root's dist/cli for tests and usage
+    outDir: '../dist/cli',
     lib: {
       entry: {
         'index': './index.ts',

@@ -5,9 +5,8 @@
 c from "picocolors"
 ora from "ora"
 import type { Ora } from "ora"
-import type { CompileResult } from "../types.civet"
 import path from "node:path"
-import { formatErrorForDisplay, logDebug } from "../support/utils.civet"
+import { formatErrorForDisplay } from "../support/utils.civet"
 
 // Create and start a build spinner
 export startBuildSpinner := (): Ora =>

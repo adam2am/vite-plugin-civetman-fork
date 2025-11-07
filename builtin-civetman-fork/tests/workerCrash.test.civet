@@ -17,9 +17,12 @@ makeTempFile := async (dir: string, name: string, content: string) ->
 
 // Resolve compiled worker script path from dist (no copying into src)
 resolveWorkerPath := async () ->
-    // Look in builtin-civetman-fork/dist/workers/compileWorker.cjs
-    candidate := path.join(__dirname, '..', 'dist', 'workers', 'compileWorker.cjs')
-    if await fs.pathExists(candidate) then candidate else candidate
+    // Prefer root dist/cli (new build location), fallback to legacy path
+    cand1 := path.join(__dirname, '..', '..', 'dist', 'cli', 'workers', 'compileWorker.cjs')
+    if await fs.pathExists(cand1) then return cand1
+    cand2 := path.join(__dirname, '..', 'dist', 'workers', 'compileWorker.cjs')
+    if await fs.pathExists(cand2) then return cand2
+    throw new Error('compileWorker.cjs not found in dist/cli or builtin-civetman-fork/dist')
 
 describe "WorkerPool – crash recovery", () =>
     it "should still compile after a worker exits abnormally", async ->

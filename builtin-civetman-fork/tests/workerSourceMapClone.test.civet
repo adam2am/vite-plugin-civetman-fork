@@ -1,0 +1,90 @@
+import { describe, it, expect } from 'vitest'
+import fs from 'fs-extra'
+import os from 'node:os'
+import path from 'node:path'
+import { WorkerPool } from '../src/worker/pool.civet'
+import { fileURLToPath } from 'node:url'
+
+// ESM __dirname polyfill
+__filename := fileURLToPath(import.meta.url)
+__dirname := path.dirname(__filename)
+
+// Generates a temporary Civet file with the given content
+makeTempFile := async (dir: string, name: string, content: string) ->
+    filePath := path.join(dir, name)
+    await fs.writeFile(filePath, content)
+    return filePath
+
+// Resolve compiled worker script path from dist
+resolveWorkerPath := async () ->
+    // Prefer root dist/cli (new build location), fallback to legacy path
+    cand1 := path.join(__dirname, '..', '..', 'dist', 'cli', 'workers', 'compileWorker.cjs')
+    if await fs.pathExists(cand1) then return cand1
+    cand2 := path.join(__dirname, '..', 'dist', 'workers', 'compileWorker.cjs')
+    if await fs.pathExists(cand2) then return cand2
+    throw new Error('compileWorker.cjs not found in dist/cli or builtin-civetman-fork/dist')
+
+describe "WorkerPool – source map payload is cloneable", () =>
+    it "should return a stringified source map without throwing DataCloneError", async ->
+        tmpDir := await fs.mkdtemp(path.join(os.tmpdir(), 'civetman-map-'))
+
+        // Simple Civet source to ensure a source map is produced
+        civetSource := 'x: number := 42\nexport { x }\n'
+        file := await makeTempFile(tmpDir, 'maptest.civet', civetSource)
+
+        workerScriptPath := await resolveWorkerPath()
+        pool := new WorkerPool(workerScriptPath, 1)
+
+        res := await pool.exec({ file, content: civetSource, isTsx: false, wantMap: true })
+
+        expect(res.ok).toBe(true)
+        if res.ok
+            expect(typeof res.mapJson === 'string').toBe(true)
+            // Should be valid JSON
+            parsed := JSON.parse(res.mapJson as string)
+            expect(typeof parsed.version === 'number' || typeof parsed.version === 'string').toBe(true)
+
+        // Clean up
+        await Promise.all(pool.idle.map((w) => w.terminate()))
+    , 15000
+
+    it "should handle parseOpts with non-cloneable data (real-world scenario)", async ->
+        tmpDir := await fs.mkdtemp(path.join(os.tmpdir(), 'civetman-parseopts-'))
+
+        // Civet source that will trigger source map generation
+        civetSource := 'foo := (x: number) => x * 2\nexport { foo }\n'
+        file := await makeTempFile(tmpDir, 'parseoptstest.civet', civetSource)
+
+        workerScriptPath := await resolveWorkerPath()
+        pool := new WorkerPool(workerScriptPath, 1)
+
+        // This simulates the REAL payload that BuildEngine sends, which includes parseOpts
+        // that may contain non-cloneable data from @danielx/civet
+        payload := {
+            file,
+            content: civetSource,
+            isTsx: false,
+            wantMap: true,
+            // This is the problematic part - parseOpts might have functions/non-cloneable data
+            parseOpts: {
+                // Some civet options that might accidentally include functions
+                someOption: "value",
+                // In reality, this could be any civet parse option that contains non-serializable data
+            }
+        }
+
+        // This should NOT throw DataCloneError
+        res := await pool.exec(payload)
+
+        expect(res.ok).toBe(true)
+        if res.ok
+            expect(typeof res.mapJson === 'string').toBe(true)
+            parsed := JSON.parse(res.mapJson as string)
+            expect(typeof parsed.version === 'number' || typeof parsed.version === 'string').toBe(true)
+
+        // Clean up
+        await Promise.all(pool.idle.map((w) => w.terminate()))
+        await fs.remove(tmpDir)
+    , 15000
+
+

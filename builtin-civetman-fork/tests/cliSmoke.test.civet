@@ -1,0 +1,24 @@
+import { describe, it } from 'vitest'
+import assert from 'node:assert'
+import fs from 'fs-extra'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import stripAnsi from 'strip-ansi'
+
+describe "CLI bundle integrity", () =>
+    it "dist/cli contains index.js and runs --help", async ->
+        root := path.resolve(__dirname, '..', '..')
+        cliDir := path.join(root, 'dist', 'cli')
+        cliIndex := path.join(cliDir, 'index.js')
+        if !(await fs.pathExists(cliIndex))
+            throw new Error('CLI not built to dist/cli/index.js')
+
+        // Should be runnable via node
+        res := spawnSync('node', [cliIndex, '--help'], { cwd: root, encoding: 'utf8' })
+        if res.status != 0
+            console.error(stripAnsi(res.stdout + res.stderr))
+            throw new Error('CLI --help failed')
+
+        out := stripAnsi(res.stdout + res.stderr)
+        assert.ok(out.toLowerCase().includes('usage'), 'CLI --help should include usage')
+

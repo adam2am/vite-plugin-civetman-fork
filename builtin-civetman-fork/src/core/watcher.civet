@@ -54,7 +54,7 @@ interface WatchBundle {
     ctx: BuildContext
 }
 
-interface CivetmanGlobal extends NodeJS.Global {
+interface CivetmanGlobal {
     __civetman_watch_bundles?: Set<WatchBundle>
     __civetman_sigint_handler_registered?: boolean
 }
@@ -112,7 +112,11 @@ export attachWatchHandlers := (watcher: FSWatcher,
 
     compileNow := async (file: string) =>
         // Clean up any stray temp files before compiling
-        await cleanupTmpFiles(cwd)
+        // Reconstruct ignore patterns (same logic as build step)
+        baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
+        userIgnores := (ctx.opts.ignoreFolders || []).map((d: string) => path.join(d, "**"))
+        ignorePatterns := [...baseIgnores, ...userIgnores].map(toPosix)
+        await cleanupTmpFiles(cwd, ignorePatterns)
         
         // Ensure we read the latest file contents; drop any cached entry
         if engine.contentCache? and engine.contentCache.delete?
@@ -197,7 +201,8 @@ export attachWatchHandlers := (watcher: FSWatcher,
             ctx.outFiles.delete(file)
         if update.hashesToDelete
             for file of update.hashesToDelete
-                delete ctx.prevHashes[file]
-                delete ctx.newHashes[file]
+                // Use Reflect.deleteProperty to avoid dynamic delete warning
+                Reflect.deleteProperty(ctx.prevHashes, file)
+                Reflect.deleteProperty(ctx.newHashes, file)
         saveStateAndSync()
 

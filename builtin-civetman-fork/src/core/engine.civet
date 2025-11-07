@@ -7,10 +7,9 @@
 fs from "fs-extra"
 path from "node:path"
 { WorkerPool } from "../worker/pool.civet"
-{ findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 // Import helpers and types from the refactored modules.
-import { resolveOutputType, makeSignature, fileToOutFile, toPosix, logDebug } from "../support/utils.civet"
+import { resolveOutputType, makeSignature, fileToOutFile, toPosix, logDebug, normalizeSourceMap } from "../support/utils.civet"
 import type { BuildContext } from "../support/config.civet"
 
 { compile } from "@danielx/civet"
@@ -114,8 +113,9 @@ export class BuildEngine
         if (@ctx.opts.concurrency ?? 2) > 1 and @pool.poolAvailable
             try
                 logDebug("[COMPILE] Compiling with worker", fileAbs)
-                // parseOpts is pre-sanitized in config.civet to be serializable. No need to re-sanitize.
-                workerResult := await @pool.exec({ file: fileAbs, content, isTsx, wantMap, parseOpts: parseOpts })
+                // LIES! The object is still contaminated. Sanitize it right here to be absolutely sure.
+                sanitizedParseOpts := if parseOpts then JSON.parse(JSON.stringify(parseOpts)) else undefined
+                workerResult := await @pool.exec({ file: fileAbs, content, isTsx, wantMap, parseOpts: sanitizedParseOpts })
                 if workerResult.ok
                     code = rewriteCivetImports(workerResult.code)
                     mapJson = workerResult.mapJson
@@ -134,7 +134,7 @@ export class BuildEngine
                     : rawResult as CivetCompileResult
                 code = rewriteCivetImports(compileResult.code)
                 if wantMap and compileResult.sourceMap?
-                    mapJson = compileResult.sourceMap.json(file, expectedOut)
+                    mapJson = normalizeSourceMap(compileResult.sourceMap.json(file, expectedOut))
         else
             logDebug("[COMPILE] Compiling in-process", fileAbs)
             compileOpts := {
@@ -142,17 +142,40 @@ export class BuildEngine
                 ...(wantMap ? { sourceMap: true } : {}),
                 ...(parseOpts ? { parseOptions: parseOpts } : {})
             }
+            try
+                safeParse := parseOpts ? JSON.parse(JSON.stringify(parseOpts)) : undefined
+                logDebug("[COMPILE_DEBUG] in-process compile options", { wantMap, filename: fileAbs, hasParseOpts: !!parseOpts, parseOpts: safeParse })
+            catch (err: unknown)
+                void 0
             rawResult := await compile(content, compileOpts)
+            try
+                logDebug("[COMPILE_DEBUG] in-process rawResult type", { rawType: typeof rawResult })
+            catch (err: unknown)
+                void 0
             compileResult: CivetCompileResult := typeof rawResult === 'string' 
                 ? { code: rawResult } 
                 : rawResult as CivetCompileResult
             code = rewriteCivetImports(compileResult.code)
+            try
+                logDebug("[COMPILE_DEBUG] in-process compileResult types", { codeType: typeof code, hasSourceMap: !!compileResult.sourceMap })
+            catch (err: unknown)
+                void 0
             if wantMap and compileResult.sourceMap?
-                mapJson = compileResult.sourceMap.json(fileAbs, expectedOut)
+                mapJson = normalizeSourceMap(compileResult.sourceMap.json(fileAbs, expectedOut))
 
         // ensure cache stores latest content (use absolute path for cache key)
         @contentCache.set(fileAbs, content)
 
+        try
+            logDebug("[COMPILE_DEBUG] calling writeOutput", {
+                file: fileAbs,
+                isTsx,
+                codeType: typeof code,
+                hasMapJson: !!mapJson,
+                mapJsonType: typeof mapJson
+            })
+        catch (err: unknown)
+            void 0
         return await @_writeOutputAndGetResult(fileAbs, isTsx, code, mapJson, signature)
 
     // Handles writing the output of a successful compilation to disk.
@@ -173,12 +196,26 @@ export class BuildEngine
         
         mapFile := expectedOut + ".map"
 
+        // DEBUG: capture types/flags before writing outputs
+        try
+            logDebug("[WRITE_DEBUG] about to write outputs", {
+                expectedOut,
+                codeType: typeof codeOut,
+                hasMapJson: !!mapJson,
+                mapJsonType: typeof mapJson,
+                inlineMap: @ctx.opts.inlineMap,
+                mapFiles: @ctx.opts.mapFiles
+            })
+        catch (err: unknown)
+            // ignore debug errors
+            void 0
+
         if @ctx.opts.inlineMap is "full" and mapJson
-            base64Map := Buffer.from(JSON.stringify(mapJson)).toString("base64")
+            base64Map := Buffer.from(mapJson).toString("base64")
             codeOut += "\n//# sourceMappingURL=data:application/json;base64," + base64Map + "\n"
 
         if @ctx.opts.mapFiles and mapJson
-            await fs.writeFile(mapFile, JSON.stringify(mapJson))
+            await fs.writeFile(mapFile, mapJson)
 
             if @ctx.opts.inlineMap is "fileurl"
                 codeOut += "\n//# sourceMappingURL=" + path.basename(mapFile) + "\n"

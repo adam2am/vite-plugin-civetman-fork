@@ -104,7 +104,10 @@ export class WorkerPool
                 worker.on("message", messageHandler)
                 worker.on("error", errorHandler)
                 worker.on("exit", exitHandler)
-                worker.postMessage(payload)
+                // Ensure we only send structured-cloneable data across the worker boundary
+                // This strips out functions, symbols, and non-serializable values from parseOpts, etc.
+                sanitized := JSON.parse(JSON.stringify(payload))
+                worker.postMessage(sanitized)
             
         finally
             @release(worker)    

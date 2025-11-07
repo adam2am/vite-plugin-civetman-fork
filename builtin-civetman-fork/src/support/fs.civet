@@ -11,8 +11,22 @@ glob from "fast-glob"
 import { logDebug, toPosix } from "./utils.civet"
 
 // Remove stray *.civetmantmp files that belong to our outputs
-export cleanupTmpFiles := async (cwd: string) =>
-    tmpFiles := await glob("**/*.civetmantmp", { cwd: cwd, dot: true })
+export cleanupTmpFiles := async (cwd: string, ignore: string[] = []) =>
+    // Filter out the "**/.*" pattern that would exclude dotfiles, since we explicitly
+    // want to find and clean up temp files that start with dots (e.g., .gitignore.uuid.civetmantmp)
+    cleanupIgnore := ignore.filter((pattern) => pattern !== "**/.*")
+    // Match both root-level and nested temp files
+    tmpFiles := await glob(["*.civetmantmp", "**/*.civetmantmp"], { cwd: cwd, dot: true, ignore: cleanupIgnore })
+    // Additional defensive scan for root-level files that some glob configs miss (e.g., filenames starting with "..")
+    try
+        rootNames := await fs.readdir(cwd)
+        rootExtras := rootNames.filter((n) => n.endsWith('.civetmantmp'))
+        for name of rootExtras
+            if !tmpFiles.includes(name) then tmpFiles.push(name)
+    catch (e)
+        // best-effort; ignore
+        void 0
+    logDebug("[CLEANUP] Scanning temp files", { cwd, count: tmpFiles.length, samples: tmpFiles.slice(0, 5) })
     for tmp of tmpFiles
         try
             await fs.unlink(path.join(cwd, tmp))

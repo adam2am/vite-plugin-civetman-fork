@@ -2,7 +2,6 @@
 // Build orchestration layer – The conductor of the build process
 // ──────────────────────────────────────────────────────────────
 
-fs from "fs-extra"
 glob from "fast-glob"
 path from "node:path"
 import type { Options, BuildContext } from "../support/config.civet"
@@ -19,14 +18,23 @@ import c from "picocolors"
 
 // Top-level build function that orchestrates the entire build process
 export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: string, throwOnError: boolean = true): Promise<{ ctx: BuildContext, engine: BuildEngine, hadError: boolean }> =>
-    // Step 0: scrub temp files from previous aborted runs
-    await cleanupTmpFiles(cwd)
+    logDebug("[TIMING] OrchestrateBuild start")
+    let lastTime = Date.now()
+    mark := (label: string) =>
+        now := Date.now()
+        logDebug(`[TIMING] ${label} took ${now - lastTime}ms`)
+        lastTime = now
 
-    // Step 1: collect source files
+    // Step 1: collect source files and define ignore patterns
     { globPatterns } := getSourcePaths(opts, cwd)
     baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
     userIgnores := (opts.ignoreFolders ?? []).map((d) => path.join(d, "**"))
     ignorePatterns := [...baseIgnores, ...userIgnores].map(toPosix)
+    mark("Ignore pattern setup")
+
+    // Step 0: scrub temp files from previous aborted runs (AFTER ignores are defined)
+    await cleanupTmpFiles(cwd, ignorePatterns)
+    mark("cleanupTmpFiles")
 
     sourcesRaw := await glob(globPatterns, ignore: ignorePatterns, cwd: cwd, caseSensitiveMatch: false)
     // glob returns relative paths when cwd is set, but we need absolute paths for file operations
@@ -34,10 +42,13 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
     sources := sourcesRaw.map((relPath: string) => path.resolve(cwd, relPath))
 
     // Step 2: load previous state and create context
+    mark(`glob found ${sources.length} files`)
     // Load Civet config once and cache its parseOptions for the whole build run
     { configContent, parseOpts } := await loadCivetConfigContent(cwd)
+    mark("loadCivetConfigContent")
 
     { prevGenerated, prevHashes } := await loadPrevState(cwd)
+    mark("loadPrevState")
     ctx: BuildContext :=
         opts: opts,
         cwd: cwd,
@@ -51,6 +62,7 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
 
     // Create the build engine which orchestrates compilation.
     engine := new BuildEngineClass(ctx, workerScriptPath)
+    mark("new BuildEngine")
 
     // Step 3: build all, with real-time progress reporting
     spinner := startBuildSpinner()
@@ -72,6 +84,7 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
         spinner.start()
 
     results := await engine.buildAll(onProgress)
+    mark("engine.buildAll")
 
     // Step 4: Process final results to update state
     for res of results
@@ -100,8 +113,7 @@ export orchestrateBuild := async (cwd: string, opts: Options, workerScriptPath: 
             // Prefer existing entry from prevHashes if it exists (preserves any metadata),
             // otherwise create new entry from the result
             ctx.newHashes[key] = ctx.prevHashes[key] ?? { sig: res.signature, outFile: out }
-        else if res.status == 'error'
-            // Error is already handled by onProgress
+        // Error status is already handled by onProgress, no action needed here
     
     reportBuildResult(spinner, hadError, builtCount, skippedCount)
 

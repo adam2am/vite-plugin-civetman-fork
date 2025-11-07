@@ -7,7 +7,6 @@ fs from "fs-extra"
 path from "node:path"
 import { loadHashesFromJSONL, writeHashesToJSONL, safeWrite } from "../support/fs.civet"
 import type { BuildContext } from "../support/config.civet"
-import type { CompileStateUpdate } from "../types.civet"
 import { logDebug } from "../support/utils.civet"
 
 // ---------------- manifest helpers (pure fs) ----------------

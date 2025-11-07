@@ -5,9 +5,7 @@
 fs from "fs-extra"
 os from "node:os"
 import type { CivetParseOptions } from "../types.civet"
-import type { ParseError } from "jsonc-parser"
-{ parseTree as jsoncParseTree, getNodeValue as jsoncGetNodeValue } from "jsonc-parser"
-{ findConfig as findCivetConfig } from "@danielx/civet/config"
+import { findConfig as findCivetConfig, loadConfig as loadCivetConfig } from "@danielx/civet/config"
 
 // ──────────────────────────────────────────────────────────────
 // Types & defaults                                                
@@ -63,19 +61,13 @@ export defaultOpts: Options :=
 // Load Civet config from the project directory
 export loadCivetConfigContent := async (cwd: string): Promise<{ configContent: string, parseOpts?: CivetParseOptions }> =>
     configPath := await findCivetConfig(cwd)
-    configContent := (configPath and await fs.pathExists(configPath)) ? await fs.readFile(configPath, "utf8") : ""
-    
-    // Parse config content directly to avoid potential caching issues in loadCivetConfig
-    // This is critical for tests that modify config and expect an immediate change.
-    cachedParseOpts := if configContent
-        errors: ParseError[] := []
-        // Parse the config and immediately sanitize it to a plain JSON object.
-        // This prevents non-serializable data (like functions) from ever
-        // entering our build context, fixing DataCloneError in worker threads.
-        tree := jsoncParseTree(configContent, errors, { allowTrailingComma: true })
-        if tree then JSON.parse(JSON.stringify(jsoncGetNodeValue(tree) || {})) else {}
-    else
-        {}
-    
-    return { configContent, parseOpts: cachedParseOpts?.parseOptions }
+    if !configPath
+        return { configContent: "", parseOpts: undefined }
+
+    // Read content for build signature
+    configContent := await fs.readFile(configPath, "utf8")
+    // Use the official, tested civet loader to get a clean config object
+    configObject := await loadCivetConfig(configPath)
+
+    return { configContent, parseOpts: configObject?.parseOptions as CivetParseOptions | undefined }
 
