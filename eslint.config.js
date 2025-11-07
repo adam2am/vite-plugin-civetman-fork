@@ -28,6 +28,7 @@ export default [
       '@typescript-eslint/no-unused-vars': ['warn', { 
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_',
+        caughtErrorsIgnorePattern: '^_', // Allow unused catch variables with _ prefix (standard pattern)
       }],
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-require-imports': 'off', // Allow require() in .cjs files
@@ -49,6 +50,7 @@ export default [
       'builtin-civetman-fork/**/*.test.js', // Ignore generated test .js files
       'builtin-civetman-fork/test-needs-tweaking/**/*.ts', // Ignore generated test .ts files
       'builtin-civetman-fork/test-needs-tweaking/**/*.js', // Ignore generated test .js files
+      'builtin-civetman-fork/test-typecheck/**', // Ignore test-typecheck files (intentional type errors)
       '**/*.civetmantmp', // Ignore temporary files
     ],
   },
