@@ -145,12 +145,14 @@ export class BuildEngine
             try
                 safeParse := parseOpts ? JSON.parse(JSON.stringify(parseOpts)) : undefined
                 logDebug("[COMPILE_DEBUG] in-process compile options", { wantMap, filename: fileAbs, hasParseOpts: !!parseOpts, parseOpts: safeParse })
-            catch (err: unknown)
+            catch (_err: unknown)
+                // Debug logging might fail, ignore silently
                 void 0
             rawResult := await compile(content, compileOpts)
             try
                 logDebug("[COMPILE_DEBUG] in-process rawResult type", { rawType: typeof rawResult })
-            catch (err: unknown)
+            catch (_err: unknown)
+                // Debug logging might fail, ignore silently
                 void 0
             compileResult: CivetCompileResult := typeof rawResult === 'string' 
                 ? { code: rawResult } 
@@ -158,7 +160,8 @@ export class BuildEngine
             code = rewriteCivetImports(compileResult.code)
             try
                 logDebug("[COMPILE_DEBUG] in-process compileResult types", { codeType: typeof code, hasSourceMap: !!compileResult.sourceMap })
-            catch (err: unknown)
+            catch (_err: unknown)
+                // Debug logging might fail, ignore silently
                 void 0
             if wantMap and compileResult.sourceMap?
                 mapJson = normalizeSourceMap(compileResult.sourceMap.json(fileAbs, expectedOut))
@@ -174,7 +177,8 @@ export class BuildEngine
                 hasMapJson: !!mapJson,
                 mapJsonType: typeof mapJson
             })
-        catch (err: unknown)
+        catch (_err: unknown)
+            // Debug logging might fail, ignore silently
             void 0
         return await @_writeOutputAndGetResult(fileAbs, isTsx, code, mapJson, signature)
 
@@ -206,8 +210,8 @@ export class BuildEngine
                 inlineMap: @ctx.opts.inlineMap,
                 mapFiles: @ctx.opts.mapFiles
             })
-        catch (err: unknown)
-            // ignore debug errors
+        catch (_err: unknown)
+            // Debug logging might fail, ignore silently
             void 0
 
         if @ctx.opts.inlineMap is "full" and mapJson

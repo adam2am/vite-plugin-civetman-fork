@@ -23,8 +23,8 @@ export cleanupTmpFiles := async (cwd: string, ignore: string[] = []) =>
         rootExtras := rootNames.filter((n) => n.endsWith('.civetmantmp'))
         for name of rootExtras
             if !tmpFiles.includes(name) then tmpFiles.push(name)
-    catch (e)
-        // best-effort; ignore
+    catch (_e)
+        // best-effort; ignore (defensive scan might fail)
         void 0
     logDebug("[CLEANUP] Scanning temp files", { cwd, count: tmpFiles.length, samples: tmpFiles.slice(0, 5) })
     for tmp of tmpFiles
