@@ -119,8 +119,12 @@ export addGitignoreEntries := async (ctx: BuildContext) =>
             nonManagedLines.push(line)
 
     // Clean up trailing blank lines to prevent them from accumulating
-    while nonManagedLines.length > 0 && nonManagedLines[nonManagedLines.length - 1].trim() === ''
-        nonManagedLines.pop()
+    while nonManagedLines.length > 0
+        lastLine := nonManagedLines[nonManagedLines.length - 1]
+        if lastLine? and lastLine.trim() === ''
+            nonManagedLines.pop()
+        else
+            break
     
     // Create the new managed block, sorted for determinism
     // Convert absolute paths to relative paths, then normalize to POSIX for cross-platform .gitignore

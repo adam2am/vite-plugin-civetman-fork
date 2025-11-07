@@ -21,7 +21,7 @@ registerBuildCommand := =>
             cwd := process.cwd()
             opts := { ...defaultOpts, ...program.opts<Options>() }
             // Resolve worker path with ENV override and fallbacks (mutable)
-            workerScriptPath .= process.env.CIVETMAN_WORKER_PATH
+            workerScriptPath .= process.env['CIVETMAN_WORKER_PATH']
             if !workerScriptPath?
                 // Prefer top-level dist/cli/workers (package consumer)
                 candidate1 := path.resolve(cwd, 'dist', 'cli', 'workers', 'compileWorker.cjs')
@@ -59,7 +59,7 @@ registerDevCommand := =>
         cwd := process.cwd()
         opts := { ...defaultOpts, ...program.opts<Options>() }
         // Resolve worker path with ENV override and fallbacks (mutable)
-        workerScriptPath .= process.env.CIVETMAN_WORKER_PATH
+        workerScriptPath .= process.env['CIVETMAN_WORKER_PATH']
         if !workerScriptPath?
             candidate1 := path.resolve(cwd, 'dist', 'cli', 'workers', 'compileWorker.cjs')
             candidate2 := path.resolve(cwd, 'builtin-civetman-fork', 'dist', 'workers', 'compileWorker.cjs')

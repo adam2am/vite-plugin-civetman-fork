@@ -15,9 +15,8 @@ export default defineConfig({
 		tsx: false,
 		gitIgnore: true,
 		vscodeHide: true,
-		inlineMap: 'none',
+		inlineMap: 'full',
 		mapFiles: false,
-		force: true,
 		ignoreFolders: ['node_modules', 'dist'],
 	}) as PluginOption],
 }) 

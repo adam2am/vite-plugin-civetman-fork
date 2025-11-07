@@ -21,7 +21,7 @@ import { saveNewState } from "./state.civet"
 export createWatcher := (cwd: string, opts: Options) ->
     // Polling by default only in CI; can be overridden via --force-polling.
     // On Windows, enable polling by default for reliability
-    usePolling := opts.forcePolling || !!process.env.CI || process.platform === 'win32'
+    usePolling := opts.forcePolling || !!process.env['CI'] || process.platform === 'win32'
     // Build ignore patterns (same logic as build step)
     baseIgnores := ["node_modules/**", "dist/**", "**/*.civetmantmp", "**/.*"]
     userIgnores := (opts.ignoreFolders || []).map((d: string) => path.join(d, "**"))

@@ -191,7 +191,7 @@ export class BuildEngine
         codeOut .= code
         
         // Inject @ts-nocheck header when compiling to JavaScript mode (parseOptions.js = true)
-        if @ctx.parseOpts?.js
+        if @ctx.parseOpts?.['js']
             codeOut = "// @ts-nocheck\n" + codeOut
         
         mapFile := expectedOut + ".map"

@@ -15,7 +15,10 @@ export interface ImportMatch {
  * Validates that a keyword is a real import/export keyword (not part of another word)
  */
 function isRealKeyword(content: string, index: number, keyword: string): boolean {
-  if (index > 0 && /\w/.test(content[index - 1])) return false;
+  if (index > 0) {
+    prevChar := content[index - 1]
+    if prevChar? and /\w/.test(prevChar) return false
+  }
   nextChar := content[index + keyword.length];
   return !nextChar || !/\w/.test(nextChar);
 }
@@ -157,7 +160,11 @@ export function findAllImports(content: string): ImportMatch[] {
     i = keywordIdx + keyword.length;
     
     // Skip whitespace after keyword
-    while (i < content.length && /\s/.test(content[i])) i++;
+    while (i < content.length) {
+      char := content[i]
+      if !char? or !/\s/.test(char) break
+      i++
+    }
     
     // Check for 'type' keyword (for type-only imports/exports)
     isTypeOnly .= false;
@@ -165,7 +172,11 @@ export function findAllImports(content: string): ImportMatch[] {
       isTypeOnly = true;
       i += 4; // Move past 'type'
       // Skip whitespace after 'type'
-      while (i < content.length && /\s/.test(content[i])) i++;
+      while (i < content.length) {
+        char := content[i]
+        if !char? or !/\s/.test(char) break
+        i++
+      }
     }
 
     inString: '"' | "'" | null .= null;
@@ -176,32 +187,35 @@ export function findAllImports(content: string): ImportMatch[] {
     // Scan forward from the keyword
     while (i < content.length) {
       char := content[i];
+      if char is null break
+      // TypeScript needs explicit check - char is now string
+      charStr := char as string
 
       // Skip whitespace
-      if (/\s/.test(char)) {
+      if (/\s/.test(charStr)) {
         i++;
         continue;
       }
       
       // Handle comments
-      if (char === '/' && content[i + 1] === '/') {
+      if (charStr === '/' && content[i + 1] === '/') {
         while (i < content.length && content[i] !== '\n') i++;
         continue;
       }
-      if (char === '/' && content[i + 1] === '*') {
+      if (charStr === '/' && content[i + 1] === '*') {
         i += 2;
         while (i < content.length && (content[i] !== '*' || content[i + 1] !== '/')) i++;
         i += 2;
         continue;
       }
       
-      if (char === '{') {
+      if (charStr === '{') {
         braceLevel++;
         potentialSideEffect = false;
         i++;
         continue;
       }
-      if (char === '}') {
+      if (charStr === '}') {
         braceLevel--;
         i++;
         continue;
@@ -220,8 +234,8 @@ export function findAllImports(content: string): ImportMatch[] {
       }
 
       // Found the specifier
-      if (char === "'" || char === '"') {
-        inString = char;
+      if (charStr === "'" || charStr === '"') {
+        inString = charStr;
         specOffset := i;
         specStart := i + 1;
         specEnd .= specStart;
@@ -237,11 +251,10 @@ export function findAllImports(content: string): ImportMatch[] {
       
       // If we see a character that isn't the start of a specifier and isn't a brace,
       // it's likely a named import, so it's not a side-effect.
-      if (/\w/.test(char)) {
-          potentialSideEffect = false;
-      }
+      if /\w/.test(charStr)
+          potentialSideEffect = false
 
-      if (char === ';' || char === '\n') {
+      if (charStr === ';' || charStr === '\n') {
         break; // End of statement, move to next keyword match
       }
       

@@ -1,6 +1,6 @@
 {
   "name": "vite-plugin-civetman-fork",
-  "version": "2.3.9",
+  "version": "2.4.0",
   "private": false,
   "description": "vite plugin for civetman (civet + watch compile)",
   "keywords": [
@@ -33,16 +33,17 @@
   "scripts": {
     "build:cli": "bunx vite build builtin-civetman-fork --config builtin-civetman-fork/vite.config.cli.ts",
     "build:tsup": "tsup",
-    "build": "bun run build:cli && bun run build:tsup && node scripts/postbuild.mjs",
+    "build": "bun run build:cli && bun run build:tsup",
     "pretest": "bun run build",
     "dev": "bunx vite --config vite.config.cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "tsc -p tsconfig.json --noEmit ; eslint .",
+    "check:tsc": "tsc -p tsconfig.json --noEmit",
     "lint:fix": "eslint . --fix"
   },
   "dependencies": {
-    "@danielx/civet": "^0.10.7",
+    "@danielx/civet": "^0.11.0",
     "chokidar": "^4.0.3",
     "commander": "^14.0.1",
     "fast-glob": "^3.3.3",
@@ -54,7 +55,7 @@
     "micromatch": "^4.0.8"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.4",
+    "@biomejs/biome": "^2.3.4",
     "@eslint/js": "^9.38.0",
     "@rollup/plugin-typescript": "^12.1.4",
     "@types/fs-extra": "^11.0.4",
@@ -70,8 +71,8 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.1",
     "vite": "^7.1.10",
-    "vite-plugin-civetman-fork": "^2.3.9",
-    "vitest": "^3.2.4"
+    "vite-plugin-civetman-fork": "^2.4.0",
+    "vitest": "^4.0.8"
   },
   "peerDependencies": {
     "vite": "^7.0.0"

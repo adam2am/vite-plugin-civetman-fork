@@ -107,7 +107,7 @@ export collectDirs := (val: string, prev: string[]) =>
 //   CIVETMAN_DEBUG="*"     → log every category
 //   CIVETMAN_DEBUG="WATCHER,COMPILE" → log only those containing this substring (case-insensitive)
 
-debugEnv := process.env.CIVETMAN_DEBUG
+debugEnv := process.env['CIVETMAN_DEBUG']
 outputDebug := !!debugEnv
 debugFilters := if debugEnv? and debugEnv != "*" and debugEnv.toLowerCase() != "all"
     new Set(debugEnv.split(",").map((s: string) => s.trim().toUpperCase()).filter((s) => !!s))

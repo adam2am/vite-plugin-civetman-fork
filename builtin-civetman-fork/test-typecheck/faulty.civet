@@ -1,0 +1,45 @@
+// Test file with intentional type errors
+
+// Error 1: Type mismatch
+myName: string := 42
+
+// Error 2: Using undefined variable  
+console.log(undefinedVar)
+
+// Error 3: Wrong function argument type
+addNumbers := (a: number, b: number): number =>
+    a + b
+
+result := addNumbers("hello", "world")
+
+// Error 4: Accessing property on null
+data: { name: string } | null := null
+console.log(data.name)
+
+// Error 5: Wrong return type
+getNumber := (): number =>
+    return "not a number"
+
+// Error 6: Missing required property
+interface User
+    name: string
+    age: number
+
+user: User := { name: "John" }
+
+// Error 7: Array type mismatch
+numbers: number[] := [1, 2, 3, "four", 5]
+
+// Error 8: Function signature mismatch
+type Handler = (x: number) => string
+handler: Handler := (x: string) => x.length
+
+// Error 9: Const violation
+config := { apiKey: "secret" } as const
+config.apiKey = "new-secret"
+
+// Error 10: Property doesn't exist
+obj := { foo: 123 }
+console.log(obj.bar)
+
+export {}

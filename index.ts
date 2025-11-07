@@ -53,7 +53,7 @@ function runCivetmanCli(command: "dev" | "build", flags: string[] = [], opt: Spa
     stdio: ["inherit", "inherit", "inherit", "ipc"],
     env: { 
       ...process.env,
-      PATH: process.env.PATH, 
+      PATH: process.env['PATH'], 
       FORCE_COLOR: "1" 
     },
     cwd: process.cwd(),
