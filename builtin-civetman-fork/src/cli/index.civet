@@ -11,6 +11,7 @@ import { logBuildFinished, logTypeCheckStart, logTypeCheckPassed, logTypeCheckFa
 import { saveNewState } from "../core/state.civet"
 import { syncIDEConfigs } from "../support/integrations.civet"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import fs from "fs-extra"
 
 // CLI command – build
@@ -20,13 +21,16 @@ registerBuildCommand := =>
         .action async =>
             cwd := process.cwd()
             opts := { ...defaultOpts, ...program.opts<Options>() }
-            // Resolve worker path with ENV override and fallbacks (mutable)
+            // Resolve worker path
             workerScriptPath .= process.env['CIVETMAN_WORKER_PATH']
             if !workerScriptPath?
-                // Prefer top-level dist/cli/workers (package consumer)
-                candidate1 := path.resolve(cwd, 'dist', 'cli', 'workers', 'compileWorker.cjs')
-                candidate2 := path.resolve(cwd, 'builtin-civetman-fork', 'dist', 'workers', 'compileWorker.cjs')
-                workerScriptPath = (await fs.pathExists(candidate1)) ? candidate1 : candidate2
+                // Robustly resolve worker path relative to this script's location
+                __filename := fileURLToPath(import.meta.url)
+                __dirname := path.dirname(__filename)
+                workerScriptPath = path.resolve(__dirname, 'workers', 'compileWorker.cjs')
+                // Add a check in case the file doesn't exist.
+                unless await fs.pathExists(workerScriptPath)
+                    throw new Error(`Worker script not found. Expected at ${workerScriptPath}. The civetman package may be corrupted.`)
             engine .= null
             try
                 buildResult := await orchestrateBuild(cwd, opts, workerScriptPath, true)
@@ -58,12 +62,16 @@ registerDevCommand := =>
         logDebug("[WatchMode] Executing dev action")
         cwd := process.cwd()
         opts := { ...defaultOpts, ...program.opts<Options>() }
-        // Resolve worker path with ENV override and fallbacks (mutable)
+        // Resolve worker path
         workerScriptPath .= process.env['CIVETMAN_WORKER_PATH']
         if !workerScriptPath?
-            candidate1 := path.resolve(cwd, 'dist', 'cli', 'workers', 'compileWorker.cjs')
-            candidate2 := path.resolve(cwd, 'builtin-civetman-fork', 'dist', 'workers', 'compileWorker.cjs')
-            workerScriptPath = (await fs.pathExists(candidate1)) ? candidate1 : candidate2
+            // Robustly resolve worker path relative to this script's location
+            __filename := fileURLToPath(import.meta.url)
+            __dirname := path.dirname(__filename)
+            workerScriptPath = path.resolve(__dirname, 'workers', 'compileWorker.cjs')
+            // Add a check in case the file doesn't exist.
+            unless await fs.pathExists(workerScriptPath)
+                throw new Error(`Worker script not found. Expected at ${workerScriptPath}. The civetman package may be corrupted.`)
         try
             logWatchModeStarting()
             { ctx, engine } := await orchestrateBuild(cwd, opts, workerScriptPath, false)
