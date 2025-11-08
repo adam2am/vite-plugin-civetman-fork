@@ -1,0 +1,78 @@
+import { describe, it, expect } from 'vitest'
+import { fileToOutFile } from '../src/support/utils.civet'
+
+describe 'fileToOutFile robustness - edge cases', ->
+    // These tests demonstrate edge cases where the current string slicing approach
+    // (file.slice(0, -7 - match[1].length)) might be fragile
+    
+    it 'handles files with multiple dots in path', ->
+        // Test: src/utils.test.ts.civet -> src/utils.test.ts
+        expect(fileToOutFile('src/utils.test.ts.civet', false)).toBe('src/utils.test.ts')
+        expect(fileToOutFile('src/utils.test.tsx.civet', false)).toBe('src/utils.test.tsx')
+        expect(fileToOutFile('src/utils.test.js.civet', false)).toBe('src/utils.test.js')
+    
+    it 'handles files with dots in directory names', ->
+        // Test: src/my.lib/utils.ts.civet -> src/my.lib/utils.ts
+        expect(fileToOutFile('src/my.lib/utils.ts.civet', false)).toBe('src/my.lib/utils.ts')
+        expect(fileToOutFile('src/my.lib/component.tsx.civet', false)).toBe('src/my.lib/component.tsx')
+        expect(fileToOutFile('src/my.lib/script.js.civet', false)).toBe('src/my.lib/script.js')
+    
+    it 'handles files with long extensions', ->
+        // Test: component.tsx.civet -> component.tsx
+        expect(fileToOutFile('component.tsx.civet', false)).toBe('component.tsx')
+        expect(fileToOutFile('module.mjs.civet', false)).toBe('module.mjs')
+        expect(fileToOutFile('common.cjs.civet', false)).toBe('common.cjs')
+    
+    it 'handles files with short extensions', ->
+        // Test: script.js.civet -> script.js
+        expect(fileToOutFile('script.js.civet', false)).toBe('script.js')
+        expect(fileToOutFile('utils.ts.civet', false)).toBe('utils.ts')
+    
+    it 'handles files where extension appears multiple times', ->
+        // Test: test.ts.test.ts.civet -> should correctly extract .ts.civet
+        // This is an edge case - the regex should match the LAST valid extension before .civet
+        expect(fileToOutFile('test.ts.test.ts.civet', false)).toBe('test.ts.test.ts')
+        expect(fileToOutFile('component.jsx.component.jsx.civet', false)).toBe('component.jsx.component.jsx')
+    
+    it 'handles Windows paths with backslashes', ->
+        // Test: C:\path\to\file.ts.civet -> C:\path\to\file.ts
+        expect(fileToOutFile('C:\\path\\to\\file.ts.civet', false)).toBe('C:\\path\\to\\file.ts')
+        expect(fileToOutFile('C:\\path\\to\\component.tsx.civet', false)).toBe('C:\\path\\to\\component.tsx')
+        expect(fileToOutFile('C:\\path\\to\\script.js.civet', false)).toBe('C:\\path\\to\\script.js')
+    
+    it 'handles relative paths', ->
+        // Test: ./src/component.tsx.civet -> ./src/component.tsx
+        expect(fileToOutFile('./src/component.tsx.civet', false)).toBe('./src/component.tsx')
+        expect(fileToOutFile('../utils.ts.civet', false)).toBe('../utils.ts')
+        expect(fileToOutFile('../../script.js.civet', false)).toBe('../../script.js')
+    
+    it 'handles all valid extensions correctly', ->
+        // Test all valid extensions to ensure they work
+        expect(fileToOutFile('file.ts.civet', false)).toBe('file.ts')
+        expect(fileToOutFile('file.tsx.civet', false)).toBe('file.tsx')
+        expect(fileToOutFile('file.js.civet', false)).toBe('file.js')
+        expect(fileToOutFile('file.jsx.civet', false)).toBe('file.jsx')
+        expect(fileToOutFile('file.mjs.civet', false)).toBe('file.mjs')
+        expect(fileToOutFile('file.cjs.civet', false)).toBe('file.cjs')
+        expect(fileToOutFile('file.mts.civet', false)).toBe('file.mts')
+        expect(fileToOutFile('file.cts.civet', false)).toBe('file.cts')
+    
+    it 'handles legacy .civet files (fallback behavior)', ->
+        // Test: legacy.civet -> legacy.ts (or legacy.tsx if tsx=true)
+        expect(fileToOutFile('legacy.civet', false)).toBe('legacy.ts')
+        expect(fileToOutFile('legacy.civet', true)).toBe('legacy.tsx')
+        expect(fileToOutFile('src/utils.civet', false)).toBe('src/utils.ts')
+        expect(fileToOutFile('src/component.civet', true)).toBe('src/component.tsx')
+    
+    it 'handles complex nested paths with multiple dots', ->
+        // Test: src/components/ui.button.test.tsx.civet -> src/components/ui.button.test.tsx
+        expect(fileToOutFile('src/components/ui.button.test.tsx.civet', false)).toBe('src/components/ui.button.test.tsx')
+        expect(fileToOutFile('src/lib/my.utils.test.ts.civet', false)).toBe('src/lib/my.utils.test.ts')
+        expect(fileToOutFile('src/lib/my.utils.test.js.civet', false)).toBe('src/lib/my.utils.test.js')
+    
+    it 'handles files that do not end with .civet', ->
+        // Test: should return the file as-is if it doesn't end with .civet
+        expect(fileToOutFile('file.ts', false)).toBe('file.ts')
+        expect(fileToOutFile('file.js', false)).toBe('file.js')
+        expect(fileToOutFile('file.txt', false)).toBe('file.txt')
+

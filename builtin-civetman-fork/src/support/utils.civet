@@ -9,6 +9,17 @@ import type { CivetStructuredError } from "../types.civet"
 c from "picocolors"
 
 // ------------------------------------------------------------------
+// Valid output extensions – single source of truth
+// ------------------------------------------------------------------
+// These are the only extensions that can appear before `.civet` in filenames
+// e.g., `foo.ts.civet` -> `foo.ts`, but `foo.test.civet` -> `foo.test.ts`
+export VALID_OUTPUT_EXTENSIONS := ["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"] as const
+export JS_EXTENSIONS := new Set([".js", ".mjs", ".cjs", ".jsx"])
+
+// Build regex pattern from valid extensions (compiled once, reused everywhere)
+VALID_EXT_PATTERN := new RegExp(`\\.(${VALID_OUTPUT_EXTENSIONS.join("|")})\\.civet$`)
+
+// ------------------------------------------------------------------
 // Global build fingerprint – any change forces full rebuilds
 // ------------------------------------------------------------------
 require := createRequire(import.meta.url)
@@ -47,12 +58,15 @@ export makeSignature := (
     )
 
 export fileToOutFile := (file: string, tsx: boolean) =>
-    // This regex matches `.<ext>.civet` at the end of a string.
+    // Check if file has a valid output extension before `.civet`
     // e.g., "foo.ts.civet" -> "foo.ts"
     // e.g., "bar.jsx.civet" -> "bar.jsx"
-    match := file.match(/\.([^.]+)\.civet$/)
-    if match and match[1]
-        return file.slice(0, -7 - match[1].length) + "." + match[1]
+    // e.g., "rebuild.test.civet" -> "rebuild.test.ts" (not "rebuild.test")
+    match := VALID_EXT_PATTERN.exec(file)
+    if match and match[1] and match.index !== undefined
+        // Use match.index instead of string math - more robust
+        // match.index points to the dot before the extension, so we include it
+        return file.slice(0, match.index + 1) + match[1]
 
     // Fallback for original `.civet` extension.
     if file.endsWith(".civet")
@@ -63,10 +77,10 @@ export fileToOutFile := (file: string, tsx: boolean) =>
 // Determine if the output file will be a JavaScript extension (.js, .mjs, .cjs, .jsx)
 export isJsExtension := (file: string, _tsx: boolean): boolean =>
     // Check for explicit extension pattern like `.jsx.civet`, `.js.civet`, etc.
-    match := file.match(/\.([^.]+)\.civet$/)
+    match := VALID_EXT_PATTERN.exec(file)
     if match and match[1]
         ext := "." + match[1]
-        return ext === ".js" or ext === ".mjs" or ext === ".cjs" or ext === ".jsx"
+        return JS_EXTENSIONS.has(ext)
     
     // For generic `.civet` files, check if output would be JS (never happens with current logic, but safe)
     // Generic .civet files always produce .ts or .tsx, so return false
@@ -75,8 +89,12 @@ export isJsExtension := (file: string, _tsx: boolean): boolean =>
 // Decide ts vs tsx based on CLI options / folder flags
 export resolveOutputType := (ctx: { cwd: string, opts: { tsx: boolean, outTs?: string[], outTsx?: string[] } }, file: string): boolean =>
     // New rule: if the file has an explicit extension like `.tsx.civet` or `.jsx.civet`, that wins.
-    if (/\.(tsx|jsx)\.civet$/.test(file)) return true
-    if (/\.(ts|js|mjs|cjs|mts|cts)\.civet$/.test(file)) return false
+    match := VALID_EXT_PATTERN.exec(file)
+    if match and match[1]
+        // Check if it's a tsx/jsx extension
+        if match[1] === "tsx" or match[1] === "jsx" then return true
+        // Otherwise it's a non-tsx extension (ts, js, mjs, cjs, mts, cts)
+        return false
     
     // Fallback to folder-based logic for legacy `.civet` files
     relativeFile := path.relative(ctx.cwd, file) 
