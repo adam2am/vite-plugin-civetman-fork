@@ -9,7 +9,7 @@ path from "node:path"
 { WorkerPool } from "../worker/pool.civet"
 
 // Import helpers and types from the refactored modules.
-import { resolveOutputType, makeSignature, fileToOutFile, toPosix, logDebug, normalizeSourceMap } from "../support/utils.civet"
+import { resolveOutputType, makeSignature, fileToOutFile, toPosix, logDebug, normalizeSourceMap, isJsExtension } from "../support/utils.civet"
 import type { BuildContext } from "../support/config.civet"
 
 { compile } from "@danielx/civet"
@@ -86,7 +86,38 @@ export class BuildEngine
             @contentCache.set(fileAbs, readData)
             readData
         
+        // Determine if output is a JS extension and set js flag accordingly
+        // Priority: 1. Explicit file extension 2. Config file js flag 3. Folder-based rules (for generic .civet)
+        expectedOut := fileToOutFile(fileAbs, isTsx)
+        
+        // Check explicit file extension first (highest priority)
+        isJsFromExtension := isJsExtension(fileAbs, isTsx)
+        
+        // Check config file for js flag (from civetconfig.json parseOptions.js)
         parseOpts := @ctx.parseOpts
+        isJsFromConfig := parseOpts?.['js'] === true
+        
+        // Also check if output extension would be JS based on folder rules (for generic .civet files)
+        // If folder says output to .js, we should set js: true
+        // But explicit extensions always win, so we only check this for generic .civet files
+        // Note: Currently, CLI doesn't support outJs/outJsx folder rules, so this is reserved for future
+        isJsFromFolder := false
+        
+        // Combine: explicit extension wins, then config, then folder
+        isJs := isJsFromExtension or isJsFromConfig or isJsFromFolder
+        
+        // If js flag is in parseOpts, we need to extract it and use it as top-level js flag
+        // Civet expects js at top level of CompileOptions, not in parseOptions
+        // So we'll remove it from parseOpts and use it separately
+        cleanParseOpts := if parseOpts
+            cleanOpts := { ...parseOpts }
+            // Remove js from parseOptions since we handle it at top level
+            if cleanOpts['js'] is not undefined
+                delete cleanOpts['js']
+            cleanOpts
+        else
+            undefined
+        
         signature := makeSignature(content, { tsx: isTsx, inlineMap: @ctx.opts.inlineMap, mapFiles: @ctx.opts.mapFiles, configContent: @ctx.configContent })
 
         // Skip check (respect --force flag)
@@ -95,7 +126,6 @@ export class BuildEngine
         fileRel := path.relative(@ctx.cwd, fileAbs)
         key := toPosix(fileRel)
         prev := @ctx.prevHashes[key]
-        expectedOut := fileToOutFile(fileAbs, isTsx)
         expectedOutRel := path.relative(@ctx.cwd, expectedOut)
         expectedOutPosix := toPosix(expectedOutRel)
         if !@ctx.opts.force and prev and prev.sig == signature and prev.outFile == expectedOutPosix and await fs.pathExists(expectedOut)
@@ -114,8 +144,8 @@ export class BuildEngine
             try
                 logDebug("[COMPILE] Compiling with worker", fileAbs)
                 // LIES! The object is still contaminated. Sanitize it right here to be absolutely sure.
-                sanitizedParseOpts := if parseOpts then JSON.parse(JSON.stringify(parseOpts)) else undefined
-                workerResult := await @pool.exec({ file: fileAbs, content, isTsx, wantMap, parseOpts: sanitizedParseOpts })
+                sanitizedParseOpts := if cleanParseOpts then JSON.parse(JSON.stringify(cleanParseOpts)) else undefined
+                workerResult := await @pool.exec({ file: fileAbs, content, isTsx, wantMap, js: isJs, parseOpts: sanitizedParseOpts })
                 if workerResult.ok
                     code = rewriteCivetImports(workerResult.code)
                     mapJson = workerResult.mapJson
@@ -126,7 +156,8 @@ export class BuildEngine
                 compileOpts := {
                     filename: file,
                     ...(wantMap ? { sourceMap: true } : {}),
-                    ...(parseOpts ? { parseOptions: parseOpts } : {})
+                    ...(isJs ? { js: true } : {}),
+                    ...(cleanParseOpts ? { parseOptions: cleanParseOpts } : {})
                 }
                 rawResult := await compile(content, compileOpts)
                 compileResult: CivetCompileResult := typeof rawResult === 'string' 
@@ -140,11 +171,12 @@ export class BuildEngine
             compileOpts := {
                 filename: fileAbs,
                 ...(wantMap ? { sourceMap: true } : {}),
-                ...(parseOpts ? { parseOptions: parseOpts } : {})
+                ...(isJs ? { js: true } : {}),
+                ...(cleanParseOpts ? { parseOptions: cleanParseOpts } : {})
             }
             try
-                safeParse := parseOpts ? JSON.parse(JSON.stringify(parseOpts)) : undefined
-                logDebug("[COMPILE_DEBUG] in-process compile options", { wantMap, filename: fileAbs, hasParseOpts: !!parseOpts, parseOpts: safeParse })
+                safeParse := cleanParseOpts ? JSON.parse(JSON.stringify(cleanParseOpts)) : undefined
+                logDebug("[COMPILE_DEBUG] in-process compile options", { wantMap, filename: fileAbs, hasParseOpts: !!cleanParseOpts, parseOpts: safeParse, isJs, isJsFromExtension, isJsFromConfig })
             catch (_err: unknown)
                 // Debug logging might fail, ignore silently
                 void 0
@@ -180,22 +212,23 @@ export class BuildEngine
         catch (_err: unknown)
             // Debug logging might fail, ignore silently
             void 0
-        return await @_writeOutputAndGetResult(fileAbs, isTsx, code, mapJson, signature)
+        return await @_writeOutputAndGetResult(fileAbs, isTsx, isJs, code, mapJson, signature)
 
     // Handles writing the output of a successful compilation to disk.
     // This is now an internal method of the engine.
     async _writeOutputAndGetResult(
         file: string,
         isTsx: boolean,
+        isJs: boolean,
         code: string,
         mapJson: string | null,
         signature: string
     ): Promise<CompileResult>
-        expectedOut := file.replace(".civet", isTsx ? ".tsx" : ".ts")
+        expectedOut := fileToOutFile(file, isTsx)
         codeOut .= code
         
-        // Inject @ts-nocheck header when compiling to JavaScript mode (parseOptions.js = true)
-        if @ctx.parseOpts?.['js']
+        // Inject @ts-nocheck header when compiling to JavaScript mode (js: true)
+        if isJs
             codeOut = "// @ts-nocheck\n" + codeOut
         
         mapFile := expectedOut + ".map"
@@ -226,15 +259,17 @@ export class BuildEngine
         
         await fs.writeFile(expectedOut, codeOut)
 
-        // --- Cleanup: remove bygone sibling (.ts vs .tsx) to prevent stale duplicates ---
-        siblingOut := file.replace('.civet', isTsx ? '.ts' : '.tsx')
-        try
-            if siblingOut != expectedOut && await fs.pathExists(siblingOut)
-                await fs.unlink(siblingOut)
-            if await fs.pathExists(siblingOut + '.map')
-                await fs.unlink(siblingOut + '.map')
-        catch (err: unknown)
-            logDebug("[WRITE] Best-effort cleanup of sibling file failed.", { siblingOut, err })
+        // --- Cleanup: remove bygone sibling (.ts vs .tsx) to prevent stale duplicates (only for generic .civet files) ---
+        // This regex ensures we only do this for files ending in `.civet`, not `.<ext>.civet`
+        if (/(?<!\.\w+)\.civet$/.test(file))
+            siblingOut := file.replace('.civet', isTsx ? '.ts' : '.tsx')
+            try
+                if siblingOut != expectedOut && await fs.pathExists(siblingOut)
+                    await fs.unlink(siblingOut)
+                if await fs.pathExists(siblingOut + '.map')
+                    await fs.unlink(siblingOut + '.map')
+            catch (err: unknown)
+                logDebug("[WRITE] Best-effort cleanup of sibling file failed.", { siblingOut, err })
 
         logDebug("built", file)
         return { status: "built", file, outFile: expectedOut, signature, mapFile: @ctx.opts.mapFiles and mapJson ? mapFile : undefined }
@@ -244,13 +279,21 @@ export class BuildEngine
         // Clear content cache (safe, internal state)
         @contentCache.delete(file)
         
-        // Describe which files to delete
-        tsFile := file.replace(".civet", ".ts")
-        tsxFile := file.replace(".civet", ".tsx")
+        // Describe which files to delete based on filename convention
+        filesToDelete: string[] := []
+        // Regex to find files like `foo.ts.civet`, `bar.cjs.civet`, etc.
+        match := file.match(/(.*)(\.\w+\.civet)$/)
+        if match && match[1] && match[2]
+            out := file.slice(0, -'.civet'.length)
+            filesToDelete.push(out, `${out}.map`)
+        else // Generic .civet, might be .ts or .tsx
+            tsFile := file.replace(".civet", ".ts")
+            tsxFile := file.replace(".civet", ".tsx")
+            filesToDelete.push(tsFile, tsxFile, `${tsFile}.map`, `${tsxFile}.map`)
         
         return {
             outFiles: [],
             newHashes: {},
-            filesToDelete: [tsFile, tsxFile, `${tsFile}.map`, `${tsxFile}.map`],
+            filesToDelete: filesToDelete,
             hashesToDelete: [file]
         }

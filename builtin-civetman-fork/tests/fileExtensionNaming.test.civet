@@ -1,0 +1,259 @@
+import { describe, it, beforeAll, afterAll, expect } from 'vitest'
+import fs from 'fs-extra'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { fileToOutFile, isJsExtension } from '../src/support/utils.civet'
+
+stripAnsi := (str: string) => str.replace(/\u001b\[[0-9;]*m/g, '')
+
+// __dirname polyfill for ESM test files
+__filename := fileURLToPath(import.meta.url)
+__dirname  := path.dirname(__filename)
+
+// Robust cleanup helper for Windows
+robustCleanup := async (dir: string) ->
+    if await fs.pathExists(dir)
+        for attempt of [1..5]
+            try 
+                await fs.remove(dir)
+                break
+            catch error
+                if attempt is 5
+                    console.warn(`Failed to clean up directory after ${attempt} attempts:`, error)
+                else
+                    await new Promise((resolve) => setTimeout(resolve, 200 * attempt))
+
+// --- Test Setup ---
+tempDir := path.resolve(__dirname, 'temp-extension-naming-test')
+cliPath := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
+
+runBuild := (cwd: string): Promise<string> ->
+    new Promise (resolve, reject) ->
+        child := spawn('node', [cliPath, 'build'], { 
+            cwd, 
+            shell: process.platform === 'win32',
+            env: { ...process.env }
+        })
+        let output = ''
+        let errOutput = ''
+        
+        child.stdout?.on('data', (data) => {
+            output += data.toString()
+        })
+        child.stderr?.on('data', (data) => {
+            errOutput += data.toString()
+        })
+
+        child.on 'error', reject
+        child.on 'close', (code) ->
+            const fullOutput = stripAnsi(output + errOutput)
+            if code === 0 || code == null
+                resolve(fullOutput)
+            else
+                reject(new Error(`Build failed with code ${code}. Output:\n${fullOutput}`))
+
+describe 'File Extension Naming Convention and Type Stripping', ->
+    beforeAll async ->
+        await robustCleanup(tempDir)
+        await fs.ensureDir(tempDir)
+        
+        // Create test files with new naming convention
+        // TypeScript files (should NOT have @ts-nocheck, types preserved)
+        await fs.writeFile(
+            path.join(tempDir, 'component.tsx.civet'), 
+            'export Component := () => <div>Hello</div>'
+        )
+        await fs.writeFile(
+            path.join(tempDir, 'utils.ts.civet'), 
+            'export const x: number = 42\nexport function add(a: number, b: number): number => a + b'
+        )
+        
+        // JavaScript files (should HAVE @ts-nocheck, types STRIPPED)
+        await fs.writeFile(
+            path.join(tempDir, 'script.js.civet'), 
+            'export const x: number = 42\nexport function add(a: number, b: number): number => a + b'
+        )
+        await fs.writeFile(
+            path.join(tempDir, 'component.jsx.civet'), 
+            'export Component := () => <div>Hello</div>'
+        )
+        await fs.writeFile(
+            path.join(tempDir, 'module.mjs.civet'), 
+            'export const x: number = 42\nexport function add(a: number, b: number): number => a + b'
+        )
+        await fs.writeFile(
+            path.join(tempDir, 'common.cjs.civet'), 
+            'module.exports = { x: 42 }'
+        )
+        
+        // Legacy .civet file for comparison
+        await fs.writeFile(
+            path.join(tempDir, 'legacy.civet'), 
+            'export const x = 42'
+        )
+
+    afterAll async ->
+        await robustCleanup(tempDir)
+
+    it 'compiles .tsx.civet to .tsx without @ts-nocheck', async ->
+        output := await runBuild(tempDir)
+        expect(output.includes('Built')).toBe(true)
+        
+        outFile := path.join(tempDir, 'component.tsx')
+        expect(await fs.pathExists(outFile)).toBe(true)
+        content := await fs.readFile(outFile, 'utf8')
+        
+        // TypeScript files should NOT have @ts-nocheck
+        expect(content.includes('// @ts-nocheck')).toBe(false)
+        expect(content.includes('Hello')).toBe(true)
+
+    it 'compiles .ts.civet to .ts without @ts-nocheck and preserves types', async ->
+        outFile := path.join(tempDir, 'utils.ts')
+        expect(await fs.pathExists(outFile)).toBe(true)
+        content := await fs.readFile(outFile, 'utf8')
+        
+        // TypeScript files should NOT have @ts-nocheck
+        expect(content.includes('// @ts-nocheck')).toBe(false)
+        expect(content.includes('42')).toBe(true)
+        // TypeScript files should PRESERVE type annotations
+        expect(content.includes(': number')).toBe(true)
+        expect(content.includes('function add(a: number, b: number): number')).toBe(true)
+
+    it 'compiles .js.civet to .js WITH @ts-nocheck and STRIPS types', async ->
+        outFile := path.join(tempDir, 'script.js')
+        expect(await fs.pathExists(outFile)).toBe(true)
+        content := await fs.readFile(outFile, 'utf8')
+        
+        // JavaScript files SHOULD have @ts-nocheck
+        if (!content.includes('// @ts-nocheck')) {
+            console.log(`[DEBUG] Expected @ts-nocheck not found in ${outFile}:\n---\n${content}\n---`)
+        }
+        expect(content.includes('// @ts-nocheck')).toBe(true)
+        expect(content.includes('42')).toBe(true)
+        // JavaScript files should STRIP type annotations when js: true
+        expect(content.includes(': number')).toBe(false)
+        // Verify the function signature doesn't have types
+        expect(content.includes('function add(a, b)')).toBe(true)
+        expect(content.includes('function add(a: number, b: number)')).toBe(false)
+
+    it 'compiles .jsx.civet to .jsx WITH @ts-nocheck', async ->
+        outFile := path.join(tempDir, 'component.jsx')
+        expect(await fs.pathExists(outFile)).toBe(true)
+        content := await fs.readFile(outFile, 'utf8')
+        
+        // JavaScript files SHOULD have @ts-nocheck
+        if (!content.includes('// @ts-nocheck')) {
+            console.log(`[DEBUG] Expected @ts-nocheck not found in ${outFile}:\n---\n${content}\n---`)
+        }
+        expect(content.includes('// @ts-nocheck')).toBe(true)
+        expect(content.includes('Hello')).toBe(true)
+
+    it 'compiles .mjs.civet to .mjs WITH @ts-nocheck and STRIPS types', async ->
+        outFile := path.join(tempDir, 'module.mjs')
+        expect(await fs.pathExists(outFile)).toBe(true)
+        content := await fs.readFile(outFile, 'utf8')
+        
+        // JavaScript files SHOULD have @ts-nocheck
+        if (!content.includes('// @ts-nocheck')) {
+            console.log(`[DEBUG] Expected @ts-nocheck not found in ${outFile}:\n---\n${content}\n---`)
+        }
+        expect(content.includes('// @ts-nocheck')).toBe(true)
+        expect(content.includes('42')).toBe(true)
+        // JavaScript files should STRIP type annotations
+        expect(content.includes(': number')).toBe(false)
+        expect(content.includes('function add(a, b)')).toBe(true)
+
+    it 'compiles .cjs.civet to .cjs WITH @ts-nocheck', async ->
+        outFile := path.join(tempDir, 'common.cjs')
+        expect(await fs.pathExists(outFile)).toBe(true)
+        content := await fs.readFile(outFile, 'utf8')
+        
+        // JavaScript files SHOULD have @ts-nocheck
+        if (!content.includes('// @ts-nocheck')) {
+            console.log(`[DEBUG] Expected @ts-nocheck not found in ${outFile}:\n---\n${content}\n---`)
+        }
+        expect(content.includes('// @ts-nocheck')).toBe(true)
+
+    it 'does not create duplicate .ts/.tsx files for explicit extensions', async ->
+        // For .tsx.civet, it should only create .tsx, not .ts
+        tsxFile := path.join(tempDir, 'component.tsx')
+        tsFile := path.join(tempDir, 'component.ts')
+        
+        expect(await fs.pathExists(tsxFile)).toBe(true)
+        // Should NOT create .ts when we explicitly specified .tsx.civet
+        expect(await fs.pathExists(tsFile)).toBe(false)
+        
+        // For .ts.civet, it should only create .ts, not .tsx
+        utilsTsFile := path.join(tempDir, 'utils.ts')
+        utilsTsxFile := path.join(tempDir, 'utils.tsx')
+        
+        expect(await fs.pathExists(utilsTsFile)).toBe(true)
+        expect(await fs.pathExists(utilsTsxFile)).toBe(false)
+
+    it 'verifies js:true option actually strips types from compilation', async ->
+        // This test verifies that js: true actually affects the compiler output
+        // We'll check the actual compiled content to ensure types are removed
+        
+        jsFile := path.join(tempDir, 'script.js')
+        tsFile := path.join(tempDir, 'utils.ts')
+        
+        jsContent := await fs.readFile(jsFile, 'utf8')
+        tsContent := await fs.readFile(tsFile, 'utf8')
+        
+        // JS file should have @ts-nocheck and no types
+        expect(jsContent.includes('// @ts-nocheck')).toBe(true)
+        expect(jsContent.includes(': number')).toBe(false)
+        // Interfaces and types should also be stripped in JS mode
+        expect(jsContent.includes('interface')).toBe(false)
+        expect(jsContent.includes('type ')).toBe(false)
+        
+        // TS file should NOT have @ts-nocheck and should have types
+        expect(tsContent.includes('// @ts-nocheck')).toBe(false)
+        expect(tsContent.includes(': number')).toBe(true)
+        
+        // Both should have the actual values and logic
+        expect(jsContent.includes('42')).toBe(true)
+        expect(tsContent.includes('42')).toBe(true)
+        expect(jsContent.includes('add')).toBe(true)
+        expect(tsContent.includes('add')).toBe(true)
+        
+        // Verify function parameters don't have types in JS
+        // JS should have: function add(a, b) or add(a, b)
+        // TS should have: function add(a: number, b: number)
+        expect(jsContent.match(/function add\([^)]*\)/)?.[0].includes(': number')).toBeFalsy()
+        expect(tsContent.includes('function add(a: number, b: number)')).toBe(true)
+
+    it 'verifies fileToOutFile and isJsExtension helpers work correctly', ->
+        // This is a unit test to verify the helper functions
+        // Test .tsx.civet
+        expect(fileToOutFile('/path/to/component.tsx.civet', false)).toBe('/path/to/component.tsx')
+        expect(isJsExtension('/path/to/component.tsx.civet', false)).toBe(false)
+        
+        // Test .ts.civet
+        expect(fileToOutFile('/path/to/utils.ts.civet', false)).toBe('/path/to/utils.ts')
+        expect(isJsExtension('/path/to/utils.ts.civet', false)).toBe(false)
+        
+        // Test .jsx.civet
+        expect(fileToOutFile('/path/to/component.jsx.civet', false)).toBe('/path/to/component.jsx')
+        expect(isJsExtension('/path/to/component.jsx.civet', false)).toBe(true)
+        
+        // Test .js.civet
+        expect(fileToOutFile('/path/to/script.js.civet', false)).toBe('/path/to/script.js')
+        expect(isJsExtension('/path/to/script.js.civet', false)).toBe(true)
+        
+        // Test .mjs.civet
+        expect(fileToOutFile('/path/to/module.mjs.civet', false)).toBe('/path/to/module.mjs')
+        expect(isJsExtension('/path/to/module.mjs.civet', false)).toBe(true)
+        
+        // Test .cjs.civet
+        expect(fileToOutFile('/path/to/common.cjs.civet', false)).toBe('/path/to/common.cjs')
+        expect(isJsExtension('/path/to/common.cjs.civet', false)).toBe(true)
+        
+        // Test legacy .civet (fallback behavior)
+        expect(fileToOutFile('/path/to/legacy.civet', true)).toBe('/path/to/legacy.tsx')
+        expect(fileToOutFile('/path/to/legacy.civet', false)).toBe('/path/to/legacy.ts')
+        expect(isJsExtension('/path/to/legacy.civet', false)).toBe(false)
+
+, 30000 // Longer timeout for file operations
+

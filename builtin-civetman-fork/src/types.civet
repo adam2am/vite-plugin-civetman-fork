@@ -27,6 +27,7 @@ export type CompileWorkerPayload =
     content: string
     isTsx: boolean
     wantMap: boolean
+    js?: boolean
     parseOpts?: Record<string, unknown> | null
 
 // Result received FROM a compile worker (discriminated union)

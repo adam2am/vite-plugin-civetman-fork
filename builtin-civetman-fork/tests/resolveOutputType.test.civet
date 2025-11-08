@@ -50,4 +50,50 @@ describe('resolveOutputType', () => {
     file := path.join(cwd, 'App.civet');
     expect(resolveOutputType(ctx, file)).toBe(true);
   });
+
+  it('should return true for .tsx.civet files (explicit extension)', () => {
+    ctx := {
+      cwd,
+      opts: { ...defaultOpts },
+    };
+    file := path.join(cwd, 'src/components/Button.tsx.civet');
+    expect(resolveOutputType(ctx, file)).toBe(true);
+  });
+
+  it('should return false for .ts.civet files (explicit extension)', () => {
+    ctx := {
+      cwd,
+      opts: { ...defaultOpts },
+    };
+    file := path.join(cwd, 'src/lib/utils.ts.civet');
+    expect(resolveOutputType(ctx, file)).toBe(false);
+  });
+
+  it('should return true for .jsx.civet files (explicit extension)', () => {
+    ctx := {
+      cwd,
+      opts: { ...defaultOpts },
+    };
+    file := path.join(cwd, 'src/components/Button.jsx.civet');
+    expect(resolveOutputType(ctx, file)).toBe(true);
+  });
+
+  it('should return false for .js.civet files (explicit extension)', () => {
+    ctx := {
+      cwd,
+      opts: { ...defaultOpts },
+    };
+    file := path.join(cwd, 'src/script.js.civet');
+    expect(resolveOutputType(ctx, file)).toBe(false);
+  });
+
+  it('should prioritize explicit extension over folder-based config', () => {
+    ctx := {
+      cwd,
+      opts: { ...defaultOpts, outTs: ['src/components'] },
+    };
+    // Even though folder says .ts, explicit .tsx.civet should win
+    file := path.join(cwd, 'src/components/Button.tsx.civet');
+    expect(resolveOutputType(ctx, file)).toBe(true);
+  });
 }); 

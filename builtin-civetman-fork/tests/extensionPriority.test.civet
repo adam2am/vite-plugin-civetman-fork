@@ -1,0 +1,165 @@
+import { describe, it, beforeAll, afterAll, expect } from 'vitest'
+import fs from 'fs-extra'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+stripAnsi := (str: string) => str.replace(/\u001b\[[0-9;]*m/g, '')
+
+// __dirname polyfill for ESM test files
+__filename := fileURLToPath(import.meta.url)
+__dirname  := path.dirname(__filename)
+
+// Robust cleanup helper for Windows
+robustCleanup := async (dir: string) ->
+    if await fs.pathExists(dir)
+        for attempt of [1..5]
+            try 
+                await fs.remove(dir)
+                break
+            catch error
+                if attempt is 5
+                    console.warn(`Failed to clean up directory after ${attempt} attempts:`, error)
+                else
+                    await new Promise((resolve) => setTimeout(resolve, 200 * attempt))
+
+// --- Test Setup ---
+tempDir := path.resolve(__dirname, 'temp-extension-priority-test')
+cliPath := path.resolve(__dirname, '..', '..', 'dist', 'cli', 'index.js')
+
+runBuild := (cwd: string, args: string[] = []): Promise<string> ->
+    new Promise (resolve, reject) ->
+        child := spawn('node', [cliPath, 'build', ...args], { 
+            cwd, 
+            shell: process.platform === 'win32',
+            env: { ...process.env }
+        })
+        let output = ''
+        let errOutput = ''
+        
+        child.stdout?.on('data', (data) => {
+            output += data.toString()
+        })
+        child.stderr?.on('data', (data) => {
+            errOutput += data.toString()
+        })
+
+        child.on 'error', reject
+        child.on 'close', (code) ->
+            const fullOutput = stripAnsi(output + errOutput)
+            if code === 0 || code == null
+                resolve(fullOutput)
+            else
+                reject(new Error(`Build failed with code ${code}. Output:\n${fullOutput}`))
+
+describe 'Extension Priority and Conflicts', ->
+    beforeAll async ->
+        await robustCleanup(tempDir)
+        await fs.ensureDir(tempDir)
+        await fs.ensureDir(path.join(tempDir, 'src', 'components'))
+        await fs.ensureDir(path.join(tempDir, 'src', 'scripts'))
+
+    afterAll async ->
+        await robustCleanup(tempDir)
+
+    it 'explicit .jsx.civet extension wins over folder-based .tsx config', async ->
+        // Create a file with explicit .jsx.civet extension in a folder configured for .tsx
+        await fs.writeFile(
+            path.join(tempDir, 'src', 'components', 'Button.jsx.civet'), 
+            'export Component := () => <div>Hello</div>'
+        )
+        
+        // Build with folder config that says components should be .tsx
+        output := await runBuild(tempDir, ['--out-tsx', 'src/components'])
+        expect(output.includes('Built')).toBe(true)
+        
+        // Should create .jsx file (explicit extension wins), not .tsx
+        jsxFile := path.join(tempDir, 'src', 'components', 'Button.jsx')
+        tsxFile := path.join(tempDir, 'src', 'components', 'Button.tsx')
+        
+        expect(await fs.pathExists(jsxFile)).toBe(true)
+        expect(await fs.pathExists(tsxFile)).toBe(false)
+        
+        // Should have @ts-nocheck (it's a JS file)
+        content := await fs.readFile(jsxFile, 'utf8')
+        expect(content.includes('// @ts-nocheck')).toBe(true)
+
+    it 'explicit .ts.civet extension wins over folder-based .tsx config', async ->
+        // Create a file with explicit .ts.civet extension in a folder configured for .tsx
+        await fs.writeFile(
+            path.join(tempDir, 'src', 'components', 'utils.ts.civet'), 
+            'export const x: number = 42'
+        )
+        
+        // Build with folder config that says components should be .tsx
+        output := await runBuild(tempDir, ['--out-tsx', 'src/components'])
+        expect(output.includes('Built')).toBe(true)
+        
+        // Should create .ts file (explicit extension wins), not .tsx
+        tsFile := path.join(tempDir, 'src', 'components', 'utils.ts')
+        tsxFile := path.join(tempDir, 'src', 'components', 'utils.tsx')
+        
+        expect(await fs.pathExists(tsFile)).toBe(true)
+        expect(await fs.pathExists(tsxFile)).toBe(false)
+        
+        // Should NOT have @ts-nocheck (it's a TS file)
+        content := await fs.readFile(tsFile, 'utf8')
+        expect(content.includes('// @ts-nocheck')).toBe(false)
+        expect(content.includes(': number')).toBe(true)
+
+    it 'config file js: true applies to generic .civet files', async ->
+        // Create a generic .civet file (no explicit extension)
+        await fs.writeFile(
+            path.join(tempDir, 'src', 'scripts', 'script.civet'), 
+            'export const x: number = 42'
+        )
+        
+        // Create config file with js: true
+        await fs.writeJson(
+            path.join(tempDir, 'civetconfig.json'),
+            { parseOptions: { js: true } }
+        )
+        
+        // Build
+        output := await runBuild(tempDir)
+        expect(output.includes('Built')).toBe(true)
+        
+        // Should create .ts file (folder/default behavior)
+        tsFile := path.join(tempDir, 'src', 'scripts', 'script.ts')
+        expect(await fs.pathExists(tsFile)).toBe(true)
+        
+        // Should have @ts-nocheck (config says js: true)
+        content := await fs.readFile(tsFile, 'utf8')
+        expect(content.includes('// @ts-nocheck')).toBe(true)
+        // Types should be stripped
+        expect(content.includes(': number')).toBe(false)
+
+    it 'explicit .js.civet extension wins over config file js: false', async ->
+        // Create a file with explicit .js.civet extension
+        await fs.writeFile(
+            path.join(tempDir, 'src', 'scripts', 'explicit.js.civet'), 
+            'export const x: number = 42'
+        )
+        
+        // Create config file with js: false (should be ignored for explicit extensions)
+        await fs.writeJson(
+            path.join(tempDir, 'civetconfig.json'),
+            { parseOptions: { js: false } }
+        )
+        
+        // Build
+        output := await runBuild(tempDir)
+        expect(output.includes('Built')).toBe(true)
+        
+        // Should create .js file (explicit extension wins)
+        jsFile := path.join(tempDir, 'src', 'scripts', 'explicit.js')
+        expect(await fs.pathExists(jsFile)).toBe(true)
+        
+        // Should have @ts-nocheck (explicit .js extension)
+        content := await fs.readFile(jsFile, 'utf8')
+        expect(content.includes('// @ts-nocheck')).toBe(true)
+        // Types should be stripped
+        expect(content.includes(': number')).toBe(false)
+
+, 30000
+

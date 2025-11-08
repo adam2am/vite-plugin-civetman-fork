@@ -47,15 +47,39 @@ export makeSignature := (
     )
 
 export fileToOutFile := (file: string, tsx: boolean) =>
-    // Only replace .civet extension at the end of the filename, not in the middle of paths
+    // This regex matches `.<ext>.civet` at the end of a string.
+    // e.g., "foo.ts.civet" -> "foo.ts"
+    // e.g., "bar.jsx.civet" -> "bar.jsx"
+    match := file.match(/\.([^.]+)\.civet$/)
+    if match and match[1]
+        return file.slice(0, -7 - match[1].length) + "." + match[1]
+
+    // Fallback for original `.civet` extension.
     if file.endsWith(".civet")
-        file.slice(0, -6) + (tsx ? ".tsx" : ".ts")
-    else
-        file
+        return file.slice(0, -6) + (tsx ? ".tsx" : ".ts")
+    
+    return file
+
+// Determine if the output file will be a JavaScript extension (.js, .mjs, .cjs, .jsx)
+export isJsExtension := (file: string, _tsx: boolean): boolean =>
+    // Check for explicit extension pattern like `.jsx.civet`, `.js.civet`, etc.
+    match := file.match(/\.([^.]+)\.civet$/)
+    if match and match[1]
+        ext := "." + match[1]
+        return ext === ".js" or ext === ".mjs" or ext === ".cjs" or ext === ".jsx"
+    
+    // For generic `.civet` files, check if output would be JS (never happens with current logic, but safe)
+    // Generic .civet files always produce .ts or .tsx, so return false
+    return false
 
 // Decide ts vs tsx based on CLI options / folder flags
 export resolveOutputType := (ctx: { cwd: string, opts: { tsx: boolean, outTs?: string[], outTsx?: string[] } }, file: string): boolean =>
-    relativeFile := path.relative(ctx.cwd, file)
+    // New rule: if the file has an explicit extension like `.tsx.civet` or `.jsx.civet`, that wins.
+    if (/\.(tsx|jsx)\.civet$/.test(file)) return true
+    if (/\.(ts|js|mjs|cjs|mts|cts)\.civet$/.test(file)) return false
+    
+    // Fallback to folder-based logic for legacy `.civet` files
+    relativeFile := path.relative(ctx.cwd, file) 
 
     findLongestMatch := (dirs: string[]) =>
         matches := (dirs || []).filter((dir: string) => {
