@@ -1,0 +1,138 @@
+# Implementation Plan
+
+- [ ] 1. Expose BuildEngine pool property for cleanup
+  - Modify `builtin-civetman-fork/src/core/engine.civet` to make the `pool` property public
+  - Ensure `pool.shutdown()` method is accessible for external cleanup
+  - _Requirements: 1.1, 1.2, 7.2, 7.3, 7.4_
+
+- [ ] 2. Add timeout mechanism to orchestrateBuild
+  - Wrap `engine.buildAll()` call in `Promise.race()` with 30-second timeout
+  - Ensure worker pool cleanup happens in finally block even on timeout
+  - Throw clear error message when timeout occurs
+  - _Requirements: 5.4, 5.5_
+
+- [ ] 3. Remove fork() pattern from VitePlugin
+  - [ ] 3.1 Delete `getCivetmanCliPath()` function from `index.civet`
+  - [ ] 3.2 Delete `runCivetmanCli()` function from `index.civet`
+  - [ ] 3.3 Add direct imports from civetman-fork core modules
+    - Import `orchestrateBuild` from `./builtin-civetman-fork/src/core/orchestrator.civet`
+    - Import `createWatcher`, `attachWatchHandlers`, `registerWatcher` from `./builtin-civetman-fork/src/core/watcher.civet`
+    - Import `saveNewState` from `./builtin-civetman-fork/src/core/state.civet`
+    - Import `syncIDEConfigs` from `./builtin-civetman-fork/src/support/integrations.civet`
+    - Import types from `./builtin-civetman-fork/src/support/config.civet` and `./builtin-civetman-fork/src/core/engine.civet`
+  - _Requirements: 1.1, 1.2, 2.4_
+
+- [ ] 4. Implement options translation helper
+  - Create `translateOptions()` function that converts `CivetmanOptions` to `Options` format
+  - Handle array normalization for `outTs`, `outTsx`, `ignoreFolders`, `onlyFolders`
+  - Apply default values matching current behavior
+  - _Requirements: 4.1, 4.2, 4.3, 4.4_
+
+- [ ] 5. Refactor buildStart() hook to use in-process API
+  - Keep circular dependency detection logic
+  - Call `translateOptions()` to convert plugin options
+  - Resolve worker script path relative to plugin dist directory
+  - Replace fork() call with direct `orchestrateBuild()` invocation
+  - Add try-finally block to ensure `engine.pool.shutdown()` is called
+  - Propagate errors to Vite using `this.error()`
+  - _Requirements: 1.1, 1.2, 1.3, 5.1, 5.2, 6.1, 6.2, 6.3, 6.4, 7.2, 7.4_
+
+- [ ] 6. Refactor configureServer() hook with Vite watcher integration
+  - [ ] 6.1 Perform initial build using `orchestrateBuild()`
+    - Call with `throwOnError=false` to continue on errors in dev mode
+    - Log warning if initial build has errors but continue
+    - Store returned `ctx` and `engine` for watch mode
+    - _Requirements: 1.1, 1.2, 5.3_
+  - [ ] 6.2 Integrate with Vite's watcher instead of creating separate chokidar instance
+    - Use `server.watcher` (Vite's existing chokidar instance) instead of `createWatcher()`
+    - Add `**/*.civet` pattern to Vite's watcher using `server.watcher.add()`
+    - Implement debounced rebuild logic for file changes
+    - _Requirements: 3.1, 3.2, 3.3_
+  - [ ] 6.3 Implement file event handlers
+    - On 'add' event: add to `ctx.sources`, compile file using `engine.build()`
+    - On 'change' event: recompile file using `engine.build()`
+    - On 'unlink' event: call `engine.createRemoveUpdate()`, delete outputs, update state
+    - Update `ctx.newHashes` and `ctx.outFiles` after each compilation
+    - Call `syncIDEConfigs()` after each change
+    - Implement `saveStateAndSync()` callback to persist state
+    - _Requirements: 3.2, 3.3, 5.3_
+  - [ ] 6.4 Add cleanup on server close
+    - Listen to `server.httpServer.on('close')` event
+    - Merge `ctx.newHashes` into `ctx.prevHashes`
+    - Call `saveNewState(ctx)` to persist final state
+    - Call `engine.pool.shutdown()` to terminate workers
+    - _Requirements: 3.4, 7.2, 7.4_
+
+- [ ] 7. Update worker script path resolution
+  - Ensure `workerScriptPath` is resolved relative to plugin's `__dirname` (dist directory)
+  - Path should be `path.join(__dirname, 'cli', 'workers', 'compileWorker.cjs')`
+  - Verify path exists and is accessible in both build and dev modes
+  - _Requirements: 1.1_
+
+- [ ] 8. Write integration tests for refactored plugin
+  - [ ] 8.1 Test build mode with successful compilation
+    - Create test project with multiple .civet files
+    - Run Vite build with plugin
+    - Verify all files compiled correctly
+    - Verify no fork() calls were made
+    - _Requirements: 8.2, 8.3_
+  - [ ] 8.2 Test build mode with compilation errors
+    - Create test project with invalid .civet syntax
+    - Run Vite build with plugin
+    - Verify error is propagated to Vite
+    - Verify worker pool is cleaned up
+    - _Requirements: 5.1, 5.2, 8.2_
+  - [ ] 8.3 Test build mode timeout handling
+    - Mock `engine.buildAll()` to hang indefinitely
+    - Run Vite build with plugin
+    - Verify timeout error is thrown after 30 seconds
+    - Verify worker pool is cleaned up
+    - _Requirements: 5.4, 5.5, 8.2_
+  - [ ] 8.4 Test dev mode initial build and watcher
+    - Create test project with .civet files
+    - Start Vite dev server with plugin
+    - Verify initial compilation succeeds
+    - Verify watcher is using Vite's watcher instance
+    - _Requirements: 3.1, 8.2_
+  - [ ] 8.5 Test dev mode file change events
+    - Start Vite dev server
+    - Add new .civet file
+    - Modify existing .civet file
+    - Delete .civet file
+    - Verify correct compilation and state updates for each event
+    - _Requirements: 3.2, 3.3, 8.2_
+  - [ ] 8.6 Test circular dependency detection
+    - Configure plugin to build civetman-fork itself
+    - Verify orchestrateBuild is skipped
+    - Verify only transform() hook is used
+    - _Requirements: 6.1, 6.2, 6.3, 6.4, 8.2_
+  - [ ] 8.7 Test options translation
+    - Test all CivetmanOptions variations
+    - Verify correct translation to Options format
+    - Verify array normalization works correctly
+    - _Requirements: 4.1, 4.2, 4.3, 4.4, 8.2_
+
+- [ ] 9. Write performance benchmarks
+  - [ ] 9.1 Create baseline benchmark for current fork() implementation
+    - Create test project with 50 .civet files
+    - Measure build time with current implementation
+    - Record baseline time
+    - _Requirements: 1.4, 8.4_
+  - [ ] 9.2 Create benchmark for refactored in-process implementation
+    - Use same test project
+    - Measure build time with refactored implementation
+    - Calculate improvement percentage
+    - Verify improvement is at least 20%
+    - _Requirements: 1.4, 8.4_
+
+- [ ] 10. Update documentation
+  - [ ] 10.1 Update README with architecture explanation
+    - Document the in-process API approach
+    - Explain performance improvements
+    - Note that no user configuration changes are needed
+    - _Requirements: N/A (documentation)_
+  - [ ] 10.2 Add inline code comments
+    - Document the options translation logic
+    - Document the Vite watcher integration
+    - Document the cleanup mechanisms
+    - _Requirements: N/A (documentation)_
