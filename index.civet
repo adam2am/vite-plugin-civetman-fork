@@ -110,10 +110,15 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
   };
   // Default output dirs if none specified
   const cwdDir = process.cwd();
-  if (!pluginOpts.outTs.length && !pluginOpts.outTsx.length) {
-    if (pluginOpts.tsx) pluginOpts.outTsx = [cwdDir];
-    else pluginOpts.outTs = [cwdDir];
-  } else if (pluginOpts.tsx && !pluginOpts.outTsx.length) {
+  const outTsLen = pluginOpts.outTs.length;
+  const outTsxLen = pluginOpts.outTsx.length;
+  if (!outTsLen && !outTsxLen) {
+    if (pluginOpts.tsx) {
+      pluginOpts.outTsx = [cwdDir];
+    } else {
+      pluginOpts.outTs = [cwdDir];
+    }
+  } else if (pluginOpts.tsx && !outTsxLen) {
     // if tsx mode and outTsx not provided, default to cwd
     pluginOpts.outTsx = [cwdDir];
   }
@@ -128,24 +133,24 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
     outTs:     (value: string | string[]) => {
       if (!value || value.length === 0) return [];
       const dirs = Array.isArray(value) ? value : [value];
-      return dirs.flatMap(dir => ['--out-ts', dir]);
+      return dirs.flatMap((dir) => ['--out-ts', dir]);
     },
     outTsx:    (value: string | string[]) => {
       if (!value || value.length === 0) return [];
       const dirs = Array.isArray(value) ? value : [value];
-      return dirs.flatMap(dir => ['--out-tsx', dir]);
+      return dirs.flatMap((dir) => ['--out-tsx', dir]);
     },
     concurrency: (n: number) => Number.isFinite(n) ? ['--concurrency', String(n)] : [],
     forcePolling: (v: boolean) => v ? ['--force-polling'] : [],
     ignoreFolders: (value: string | string[]) => {
       if (!value || (Array.isArray(value) && value.length === 0)) return [];
       const dirs = Array.isArray(value) ? value : [value];
-      return dirs.flatMap(dir => ['--ignore-folders', dir]);
+      return dirs.flatMap((dir) => ['--ignore-folders', dir]);
     },
     onlyFolders: (value: string | string[]) => {
       if (!value || (Array.isArray(value) && value.length === 0)) return [];
       const dirs = Array.isArray(value) ? value : [value];
-      return dirs.flatMap(dir => ['--only-folders', dir]);
+      return dirs.flatMap((dir) => ['--only-folders', dir]);
     },
     force: (v: boolean) => v ? ['--force'] : [],
   } as Record<keyof CivetmanOptions, (value: unknown) => string[]>;
@@ -155,7 +160,7 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
   ];
 
   function getFlags(): string[] {
-    return flagOrder.flatMap(key => flagGenerators[key](pluginOpts[key as keyof CivetmanOptions]));
+    return flagOrder.flatMap((key) => flagGenerators[key](pluginOpts[key as keyof CivetmanOptions]));
   }
 
   return {
@@ -215,25 +220,31 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
         // Launch Civet compiler for production build
         const child = runCivetmanCli("build", getFlags());
         try {
-          await new Promise<void>((resolve, reject) => {
-            child.on("error", reject);
-            child.on("exit", onResult);
+          await new Promise<void>((_resolve, reject) => {
             // safety net: if child hangs, kill after 30 s so build doesn't stall
             const timeout = setTimeout(() => {
               console.error("[civetman-vite] child still running after 30s – killing");
               child.kill("SIGTERM");
             }, 30_000);
 
-            function onResult(code: number | null) {
+            onResult := (code: number | null) => {
               clearTimeout(timeout);
-              if (code === 0) resolve();
-              else reject(new Error(`Civet build failed (exit ${code}). See logs above.`));
+              if (code === 0) {
+                resolve();
+              } else {
+                reject(new Error(`Civet build failed (exit ${code}). See logs above.`));
+              }
+              return;
             }
+
+            child.on("error", reject);
+            child.on("exit", onResult);
           });
           // success: continue Vite bundle
         } catch (err: unknown) {
           // propagate fatal error to Vite
-          this.error(err instanceof Error ? err : new Error(String(err)));
+          const error = err instanceof Error ? err : new Error(String(err));
+          this.error(error);
         }
       }
     },
@@ -243,19 +254,20 @@ export function civetman(options: CivetmanOptions = {}): Plugin {
         function tryCompileCivetmanWatch() {
           if (process) return;
           process = runCivetmanCli("dev", getFlags());
-          process.on("exit", code => {
+          process.on("exit", (code) => {
             console.error("CIVETMAN compile error is exit code=", code)
             process = undefined
           })
         }
         tryCompileCivetmanWatch();
         server.watcher.add('**/*.civet');
-        server.watcher.on("change", path => {
+        server.watcher.on("change", (path) => {
           if (path.endsWith(".civet")) {
             tryCompileCivetmanWatch();
           }
         })
       }
+      return;
     },
   }
 }
